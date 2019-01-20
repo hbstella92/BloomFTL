@@ -6,6 +6,7 @@
 #include "settings.h"
 #include "lsm_settings.h"
 #include "bloomfilter.h"
+#include "sha1.h"
 
 #define CHANNEL 8
 #define WAY 8
@@ -44,8 +45,25 @@ uint32_t generate_lba(char* mode) {
     }
 }
 
+uint32_t* hashing_key(uint32_t key) {
+    uint32_t* hashkey;
+    char* string = (char*)&key;
+    char result[21];
+    char hexresult[41];
+    size_t offset;
+
+    SHA1(result, string, strlen(string));
+
+    for(offset=0; offset<20; offset++) {
+        sprintf((hexresult + (2*offset)), "%02x", result[offset] & 0xff);
+    }
+
+    hashkey = (uint32_t*)hexresult;
+    return hashkey;
+}
+
 void bloom_write(uint32_t lba, uint32_t data) {
-    uint32_t pbn, key;
+    uint32_t pbn, key, *hashkey;
     int way, chnl, empty;
 
     pbn = (lba & ((1 << 6) - 1));
@@ -54,16 +72,17 @@ void bloom_write(uint32_t lba, uint32_t data) {
     empty = data_block[way][chnl].empty;
     // SEQWR
     key = lba + empty;
+    hashkey = hashing_key(key);
 
     data_block[way][chnl].page[empty] = data;
     data_block[way][chnl].oob[empty] = lba;
     data_block[way][chnl].empty++;
   
-    bf_set(global_bf[pbn], key);
+    bf_set(global_bf[pbn], *hashkey);
 }
 
 int bloom_read(uint32_t lba) {
-    uint32_t pbn, key, data;
+    uint32_t pbn, key, data, *hashkey;
     int way, chnl, empty;
 
     pbn = (lba & ((1 << 6) - 1));
@@ -73,21 +92,16 @@ int bloom_read(uint32_t lba) {
 
     for(int idx=empty-1; idx>=0; idx--) {
         key = lba + idx;
+        hashkey = hashing_key(key);
         
-        if(bf_check(global_bf[pbn], key) == true) { // Bloomfilter true - true or false
+        if(bf_check(global_bf[pbn], *hashkey) == true) { // Bloomfilter true - true or false
             if(data_block[way][chnl].oob[idx] == lba) { // really true
                 found_cnt++;
                 return data;
             }
             else { // really false
                 notfound_cnt++;
-                
                 continue;
-            }
-        }
-        else { // Bloomfilter false - really false
-            if(idx == 0) {
-                notfound_cnt++;
             }
         }
     }
@@ -154,7 +168,7 @@ int main() {
         read_cnt++;
     }
 
-    printf("\nTEST random read\n");
+    printf("\nTEST\n");
     printf("NUM READ: %d\n", read_cnt);
     printf("Total found num: %d\n", found_cnt);
     printf("Total not-found num: %d\n", notfound_cnt);
