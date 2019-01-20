@@ -1,0 +1,11 @@
+#LOGS
+*.txt
+
+#SWAP-FILE
+*.swp
+
+#RUNTIME-FILE
+*.out
+
+#TEST-DIR
+example/

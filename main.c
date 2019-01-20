@@ -6,13 +6,16 @@
 #include "settings.h"
 #include "lsm_settings.h"
 #include "bloomfilter.h"
-#include "sha1.h"
+#include "sha256.h"
 
 #define CHANNEL 8
 #define WAY 8
 #define NUM_PAGES 128
 #define NUM_BLOCKS (CHANNEL*WAY)
 #define RANGE_LBA (NUM_BLOCKS*NUM_PAGES)
+
+uint32_t wr_hash_arr[RANGE_LBA];
+uint32_t rd_hash_arr[RANGE_LBA];
 
 uint32_t data;
 int read_cnt;
@@ -45,25 +48,46 @@ uint32_t generate_lba(char* mode) {
     }
 }
 
-uint32_t* hashing_key(uint32_t key) {
-    uint32_t* hashkey;
-    char* string = (char*)&key;
-    char result[21];
-    char hexresult[41];
-    size_t offset;
+uint32_t hashing_key(uint32_t key) {
+    char* string;
+    Sha256Context ctx;
+    SHA256_HASH hash;
+    uint32_t bytes_arr[8];
+    uint32_t hashkey;
+    
+    string = (char*)&key;
 
-    SHA1(result, string, strlen(string));
+    Sha256Initialise(&ctx);
+    Sha256Update(&ctx, (unsigned char*)string, sizeof(uint32_t));
+    Sha256Finalise(&ctx, &hash);
 
-    for(offset=0; offset<20; offset++) {
-        sprintf((hexresult + (2*offset)), "%02x", result[offset] & 0xff);
+    for(int i=0; i<8; i++) {
+        bytes_arr[i] = ((hash.bytes[i*4] << 24) | (hash.bytes[i*4+1] << 16) | \
+                (hash.bytes[i*4+2] << 8) | (hash.bytes[i*4+3]));
     }
 
-    hashkey = (uint32_t*)hexresult;
+    hashkey = bytes_arr[0];
+    for(int i=1; i<8; i++) {
+        hashkey ^= bytes_arr[i];
+    }
+
     return hashkey;
 }
 
+void print_stats() {
+    printf("\nWRITE REQUEST\n");
+    for(int i=0; i<RANGE_LBA; i++) {
+        printf("%d\t%u\n", i, wr_hash_arr[i]);
+    }
+
+    printf("\nREAD REQUEST\n");
+    for(int i=0; i<RANGE_LBA; i++) {
+        printf("%d\t%u\n", i, rd_hash_arr[i]);
+    }
+}
+
 void bloom_write(uint32_t lba, uint32_t data) {
-    uint32_t pbn, key, *hashkey;
+    uint32_t pbn, key, hashkey;
     int way, chnl, empty;
 
     pbn = (lba & ((1 << 6) - 1));
@@ -73,16 +97,17 @@ void bloom_write(uint32_t lba, uint32_t data) {
     // SEQWR
     key = lba + empty;
     hashkey = hashing_key(key);
+    wr_hash_arr[write_cnt] = hashkey;
 
     data_block[way][chnl].page[empty] = data;
     data_block[way][chnl].oob[empty] = lba;
     data_block[way][chnl].empty++;
   
-    bf_set(global_bf[pbn], *hashkey);
+    bf_set(global_bf[pbn], hashkey);
 }
 
-int bloom_read(uint32_t lba) {
-    uint32_t pbn, key, data, *hashkey;
+void bloom_read(uint32_t lba) {
+    uint32_t pbn, key, data, hashkey;
     int way, chnl, empty;
 
     pbn = (lba & ((1 << 6) - 1));
@@ -93,11 +118,11 @@ int bloom_read(uint32_t lba) {
     for(int idx=empty-1; idx>=0; idx--) {
         key = lba + idx;
         hashkey = hashing_key(key);
+        rd_hash_arr[read_cnt] = hashkey;
         
-        if(bf_check(global_bf[pbn], *hashkey) == true) { // Bloomfilter true - true or false
+        if(bf_check(global_bf[pbn], hashkey) == true) { // Bloomfilter true - true or false
             if(data_block[way][chnl].oob[idx] == lba) { // really true
                 found_cnt++;
-                return data;
             }
             else { // really false
                 notfound_cnt++;
@@ -151,7 +176,7 @@ int main() {
         for(int j=0; j<CHANNEL; j++) {
             printf("In block %d\n", i * CHANNEL + j);
             for(int k=0; k<NUM_PAGES; k++) {
-                printf("%d\t", data_block[i][j].page[k]);
+                printf("%u\t", data_block[i][j].page[k]);
             }
             printf("\n");
         }
@@ -161,20 +186,47 @@ int main() {
 
     srand((unsigned int)time(NULL));
 
+    data = 0;
     while(try_read--) {
         lba = generate_lba("RAND");
         
         bloom_read(lba);
+        data++;
         read_cnt++;
     }
 
-    printf("\nTEST\n");
+    printf("TEST\n");
     printf("NUM READ: %d\n", read_cnt);
     printf("Total found num: %d\n", found_cnt);
     printf("Total not-found num: %d\n", notfound_cnt);
     printf("RAF: %.2f\n", (float)(found_cnt + notfound_cnt) / read_cnt);
     printf("DONE !!\n");
 
+//    print_stats();
+/*
+    printf("\nHASH DUPLICATION CHECK\n");
+    for(int i=0; i<RANGE_LBA; i++) {
+        for(int j=0; j<RANGE_LBA; j++) {
+            if(i != j) {
+                if(wr_hash_arr[i] == wr_hash_arr[j]) {
+                    printf("ERROR\n");
+                    return -1;
+                }
+            }
+        }
+    }
+
+    int same=0;
+    printf("\nHASH WR != RD CHECK\n");
+    for(int i=0; i<RANGE_LBA; i++) {
+        for(int j=0; j<RANGE_LBA; j++) {
+            if(wr_hash_arr[i] == rd_hash_arr[j]) {
+                same++;
+            }
+        }
+    }
+    printf("same cnt should be 8192: %d\n", same);
+*/
     for(int i=0; i<WAY; i++) {
         for(int j=0; j<CHANNEL; j++) {
             free(data_block[i][j].page);
