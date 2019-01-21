@@ -10,10 +10,10 @@
 
 #define CHANNEL 8
 #define WAY 8
+#define NUM_CHIP (CHANNEL*WAY)
+#define BLOCK_PER_CHIP 64
 #define NUM_PAGES 128
-#define NUM_BLOCKS (CHANNEL*WAY)
-#define RANGE_LBA (NUM_BLOCKS*NUM_PAGES)
-//#define RANGE_LBA (NUM_BLOCKS*NUM_PAGES)
+#define RANGE_LBA (NUM_CHIP * BLOCK_PER_CHIP * NUM_PAGES)
 
 uint32_t wr_hash_arr[RANGE_LBA];
 uint32_t rd_hash_arr[RANGE_LBA];
@@ -21,7 +21,7 @@ uint32_t rd_hash_arr[RANGE_LBA];
 uint32_t data;
 int read_cnt;
 int write_cnt;
-int cnt;
+int error_cnt;
 int read_cache_hit;
 int read_cache_miss;
 
@@ -126,7 +126,6 @@ void bloom_read(uint32_t lba) {
         if(bf_check(global_bf[pbn], hashkey) == true) { // Bloomfilter true - true or false
             if(data_block[way][chnl].oob[idx] == lba) { // really true
                 found_cnt++;
-                return;
             }
             else { // really false
                 notfound_cnt++;
@@ -134,7 +133,7 @@ void bloom_read(uint32_t lba) {
             }
         }
         else {
-            cnt++;
+            error_cnt++;
         }
     }
 }
@@ -144,7 +143,7 @@ int main() {
     uint32_t lba, pbn;
 
     try_read = try_write = RANGE_LBA;
-    cnt = read_cnt = write_cnt = read_cache_hit = read_cache_miss = 0;
+    read_cnt = write_cnt = error_cnt = read_cache_hit = read_cache_miss = 0;
     true_cnt = false_cnt = 0;
     found_cnt = notfound_cnt = 0;
 
@@ -206,9 +205,9 @@ int main() {
     printf("NUM READ: %d\n", read_cnt);
     printf("Total found num: %d\n", found_cnt);
     printf("Total not-found num: %d\n", notfound_cnt);
-    printf("Total error num: %d\n", cnt);
     printf("RAF: %.2f\n", (float)(found_cnt + notfound_cnt) / read_cnt);
     printf("DONE !!\n");
+    printf("%d\n", error_cnt);
 
 //    print_stats();
 /*
