@@ -14,6 +14,7 @@
 #define NUM_PAGES 128
 #define NUM_BLOCKS (CHANNEL*WAY)
 #define RANGE_LBA (NUM_BLOCKS*NUM_PAGES)
+//#define RANGE_LBA (NUM_BLOCKS*NUM_PAGES)
 
 typedef struct check {
     uint32_t lba;
@@ -29,6 +30,12 @@ uint32_t data;
 int num;
 int read_cnt;
 int write_cnt;
+<<<<<<< HEAD
+=======
+int cnt;
+int read_cache_hit;
+int read_cache_miss;
+>>>>>>> 91d6d8acd0e4d9cbdfdfb787f7225a2ebaa121e7
 
 int true_cnt;
 int false_cnt;
@@ -114,8 +121,13 @@ void bloom_write(char* req, uint32_t data) {
     } while(empty >= NUM_PAGES);
 
     // SEQWR
+<<<<<<< HEAD
     //key = hashing_key(lba) + empty;
     key = lba + empty;
+=======
+    key = hashing_key(lba) + empty;
+    //key = lba + empty;
+>>>>>>> 91d6d8acd0e4d9cbdfdfb787f7225a2ebaa121e7
     hashkey = hashing_key(key);
     //wr_hash_arr[write_cnt] = hashkey;
 
@@ -140,8 +152,12 @@ void bloom_read(char* req) {
     empty = data_block[way][chnl].empty;
 
     for(int idx=empty-1; idx>=0; idx--) {
+<<<<<<< HEAD
         //key = hashing_key(lba) + idx;
         key = lba + idx;
+=======
+        key = hashing_key(lba) + idx;
+>>>>>>> 91d6d8acd0e4d9cbdfdfb787f7225a2ebaa121e7
         hashkey = hashing_key(key);
         //rd_hash_arr[read_cnt] = hashkey;
         
@@ -159,7 +175,11 @@ reading[found_cnt].d = data_block[way][chnl].page[idx];
             }
         }
         else {
+<<<<<<< HEAD
             false_cnt++;
+=======
+            cnt++;
+>>>>>>> 91d6d8acd0e4d9cbdfdfb787f7225a2ebaa121e7
         }
     }
 }
@@ -171,7 +191,11 @@ int main() {
     uint64_t bytes=0, sum_bytes=0;
 
     try_read = try_write = RANGE_LBA;
+<<<<<<< HEAD
     num = read_cnt = write_cnt = 0;
+=======
+    cnt = read_cnt = write_cnt = read_cache_hit = read_cache_miss = 0;
+>>>>>>> 91d6d8acd0e4d9cbdfdfb787f7225a2ebaa121e7
     true_cnt = false_cnt = 0;
     found_cnt = notfound_cnt = 0;
 
@@ -250,7 +274,11 @@ int main() {
     printf("NUM READ: %d\n", read_cnt);
     printf("Total found num: %d\n", found_cnt);
     printf("Total not-found num: %d\n", notfound_cnt);
+<<<<<<< HEAD
     printf("Total error num: %d\n", false_cnt);
+=======
+    printf("Total error num: %d\n", cnt);
+>>>>>>> 91d6d8acd0e4d9cbdfdfb787f7225a2ebaa121e7
     printf("RAF: %.2f\n", (float)(found_cnt + notfound_cnt) / read_cnt);
     printf("Sum of bloom bytes: %lu\n", sum_bytes);
     printf("DONE !!\n");
