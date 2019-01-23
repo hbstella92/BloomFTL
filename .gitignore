@@ -5,7 +5,9 @@
 *.swp
 
 #RUNTIME-FILE
-*.out
+main
 
 #TEST-DIR
 example/
+log_0121/
+output/
