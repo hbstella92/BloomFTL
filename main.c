@@ -157,7 +157,7 @@ void bloom_read(char* req) {
     int way, chnl, empty;
 
     lba = generate_lba(req, "RD");
-printf("LBA %u\n", lba);
+//printf("LBA %u\n", lba);
     pbn = (lba & ((1 << 6) - 1));
     way = pbn / CHANNEL;
     chnl = pbn % CHANNEL;
@@ -264,8 +264,8 @@ int main() {
 */
     data = 0;
     while(try_read--) {
-//        bloom_read("SEQ");
-        bloom_read("RAND");
+        bloom_read("SEQ");
+//        bloom_read("RAND");
         data++;
         read_cnt++;
     }
