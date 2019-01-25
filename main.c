@@ -20,13 +20,20 @@ typedef struct check {
     uint32_t d;
 } check;
 
+typedef struct dat {
+    uint32_t lbanum;
+    int valid;
+} dat;
+
+dat wrdata[RANGE_LBA];
+dat rddata[RANGE_LBA];
+int workset;
+
 //check written[RANGE_LBA];
 //check reading[RANGE_LBA];
 
-uint32_t lba_arr[RANGE_LBA];
 uint32_t data;
 
-int num;
 int read_cnt;
 int write_cnt;
 
@@ -47,16 +54,25 @@ Block** data_block;
 
 uint32_t generate_lba(char* req, char* mode) {
     if(!strcmp(req, "SEQ")) {
-        if(!strcmp(mode, "WR")) {
+        if(!strcmp(mode, "RD")) {
+            while(rddata[data].valid != 1) {
+                data++;
+                
+                if(data > workset) {
+                    data = 0;
+                }
+            }
             return data;
         }
-        return lba_arr[data];
+
+        return data;
     }
     else if(!strcmp(req, "RAND")) {
         if(!strcmp(mode, "RD")) {
             int rand_idx = rand() % RANGE_LBA;
-            return lba_arr[rand_idx];
+            return wrdata[rand_idx].lbanum;
         }
+
         return rand() % RANGE_LBA;
     }
 }
@@ -123,10 +139,17 @@ void bloom_write(char* req, uint32_t data) {
     bf_set(global_bf[pbn*NUM_PAGES+empty], hashkey);
     data_block[way][chnl].page[empty] = data;
     data_block[way][chnl].oob[empty] = lba;
-//written[num].lba = lba;
-//written[num].d = data;
+//written[write_cnt].lba = lba;
+//written[write_cnt].d = data;
     data_block[way][chnl].empty++;
-    lba_arr[num++] = lba;
+    wrdata[write_cnt].lbanum = lba;
+    wrdata[write_cnt].valid = 1;
+    
+    if(workset <= lba) {
+        workset = lba;
+    }
+
+    rddata[lba].valid = 1;
 }
 
 void bloom_read(char* req) {
@@ -134,6 +157,7 @@ void bloom_read(char* req) {
     int way, chnl, empty;
 
     lba = generate_lba(req, "RD");
+printf("LBA %u\n", lba);
     pbn = (lba & ((1 << 6) - 1));
     way = pbn / CHANNEL;
     chnl = pbn % CHANNEL;
@@ -171,7 +195,7 @@ int main() {
     uint64_t bytes=0, sum_bytes=0;
 
     try_read = try_write = RANGE_LBA;
-    num = read_cnt = write_cnt = 0;
+    read_cnt = write_cnt = 0;
     true_cnt = false_cnt = 0;
     found_cnt = notfound_cnt = 0;
 
@@ -220,16 +244,28 @@ int main() {
 
     srand((unsigned int)time(NULL));
 
-    data = 0;
+    data = 0; workset = 0;
     while(try_write--) {
+//        bloom_write("SEQ", data);
         bloom_write("RAND", data);
         data++;
         write_cnt++;
     }
-
+/*
+    for(int i=0; i<WAY; i++) {
+        for(int j=0; j<CHANNEL; j++) {
+            printf("BLOCK %d\n", i*WAY+j);
+            for(int k=0; k<NUM_PAGES; k++) {
+                printf("%d\t", data_block[i][j].page[k]);
+            }
+            printf("\n\n");
+        }
+    }
+*/
     data = 0;
     while(try_read--) {
-        bloom_read("SEQ");
+//        bloom_read("SEQ");
+        bloom_read("RAND");
         data++;
         read_cnt++;
     }
