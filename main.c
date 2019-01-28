@@ -30,10 +30,16 @@ uint32_t val;
 
 typedef struct {
     uint32_t lbanum;
-    int bit;
+    int vbit;
+    int level;
+    int found;
+    int notfound;
+    double fp;
 } Dat;
 
+// Struct-Dat follows generated sequences of their own
 Dat written[DATA_SET];
+Dat reading[DATA_SET]; // for statistics
 
 int read_cnt;
 int write_cnt;
@@ -147,6 +153,11 @@ void bloom_init() {
             }
         }
     }
+
+    // Initialize values for statistics
+    for(int i=0; i<DATA_SET; i++) {
+        reading[i].found = reading[i].notfound = 0;
+    }
 }
 
 void bloom_destroy() {
@@ -215,7 +226,7 @@ uint32_t generate_lba(char* req, char* pttr) {
     }
     else {
         if(!strcmp(pttr, "SQ")) {
-            while(written[val].bit != 1) {
+            while(written[val].vbit != 1) {
                 val++;
 
                 if(val > data_sz) {
@@ -261,7 +272,7 @@ void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
 
     // Record working set
     written[write_cnt].lbanum = lba;
-    written[write_cnt].bit = 1;
+    written[write_cnt].vbit = 1;
 
     if(data_sz <= lba) {
         data_sz = lba;
@@ -287,10 +298,14 @@ void bloom_read(uint32_t lba) {
         if(bf_check(global_bf[chip]->bfchip_arr[blk][idx], hashkey) == true) {
             if(storage.chip_arr[way][chnl].data_blk[blk].oob[idx] == lba) { // Data exists
                 found_cnt++;
+                reading[read_cnt].lbanum = lba;
+                reading[read_cnt].level = offset - idx;
+                reading[read_cnt].found++;
                 return;
             }
             else { // Data doesn't exist
                 notfound_cnt++;
+                reading[read_cnt].notfound++;
                 continue;
             }
         }
@@ -303,6 +318,17 @@ void bloom_read(uint32_t lba) {
 
 void print_stats() {
     uint64_t sum = 0;
+
+    printf("\nFOUND LEVEL OF ALL READ REQUESTS\n");
+    for(int i=0; i<DATA_SET; i++) {
+        printf("req_num: %d level: %d\n", i, reading[i].level);
+    }
+
+    printf("\nFALSE POSITIVE RATE OF ALL READ REQUESTS\n");
+    for(int i=0; i<DATA_SET; i++) {
+        reading[i].fp = (double)reading[i].notfound / (reading[i].found + reading[i].notfound);
+        printf("req_num: %d false_p: %.2lf\n", i, reading[i].fp);
+    }
     
     printf("\nTEST\n");
     printf("Total read requests: %d\n", read_cnt);
