@@ -120,6 +120,51 @@ KEYT hashfunction(KEYT key){
 	key = key ^ (key >> 16);*/
 	return key;
 }
+
+/* HASH FUNC IS 1
+BF* bf_init(int entry, float fpr) {
+    if(fpr > 1) { return NULL; }
+
+    BF* res = (BF*)malloc(sizeof(BF));
+    res->n = entry;
+    res->k = 1;
+    res->p = fpr;
+    res->m = ceil(-1 / (log(1-pow(res->p,1/1)) / log(exp(1.0))));
+printf("n: %d\tp: %f\tm: %d\tk: %u\n", res->n, res->p, res->m, res->k);
+    int targetsize = res->m / 8;
+    //unsigned long long targetsize = res->m / 8;
+    if(res->m % 8) {
+        targetsize++;
+    }
+    res->body = (char*)malloc(targetsize);
+    memset(res->body, 0, targetsize);
+    res->p = fpr;
+    res->targetsize = targetsize;
+    return res;
+}
+*/
+
+/* Bit 8, 16
+BF* bf_init(int entry, int page, float fpr){
+	if(fpr>1)
+		return NULL;
+	BF *res=(BF*)malloc(sizeof(BF));
+	res->n=entry;
+if(page < 5) res->m = 16;
+else res->m = 8;
+	res->k=round(log(2.0) * (float)res->m / res->n);
+	int targetsize=res->m/8;
+	if(res->m%8)
+		targetsize++;
+	res->body=(char*)malloc(targetsize);
+	memset(res->body,0,targetsize);
+	res->p=fpr;
+	res->targetsize=targetsize;
+	return res;
+}
+*/
+// Original bf_init
+
 BF* bf_init(int entry, float fpr){
 	if(fpr>1)
 		return NULL;
@@ -137,6 +182,21 @@ BF* bf_init(int entry, float fpr){
 	return res;
 }
 
+
+uint32_t bf_func(BF* input){
+    return input->k;
+}
+
+/*
+uint32_t bf_func(int entry, float fpr){
+	BF *res=(BF*)malloc(sizeof(BF));
+	res->n=entry;
+	res->m=ceil((res->n * log(fpr)) / log(1.0 / (pow(2.0, log(2.0)))));
+	res->k=round(log(2.0) * (float)res->m / res->n);
+    return res->k;
+}
+*/
+
 BF* bf_cpy(BF *src){
 	if(src==NULL) return NULL;
 	BF* res=(BF*)malloc(sizeof(BF));
@@ -145,12 +205,28 @@ BF* bf_cpy(BF *src){
 	memcpy(res->body,src->body,res->targetsize);
 	return res;
 }
+/*
+uint64_t bf_bits(BF* input) {
+    return input->m;
+}
+*/
 
 uint64_t bf_bits(int entry, float fpr){
 	if(fpr>1) return 0;
 	uint64_t n=entry;
 	uint64_t m=ceil((n * log(fpr)) / log(1.0 / (pow(2.0, log(2.0)))));
 	int targetsize=m/8;
+
+    return m;
+}
+
+
+uint64_t bf_bytes(int entry, float fpr){
+	if(fpr>1) return 0;
+	uint64_t n=entry;
+	uint64_t m=ceil((n * log(fpr)) / log(1.0 / (pow(2.0, log(2.0)))));
+	int targetsize=m/8;
+
 	if(m%8)
 		targetsize++;
 	return targetsize;

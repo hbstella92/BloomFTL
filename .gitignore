@@ -5,9 +5,13 @@
 *.swp
 
 #RUNTIME-FILE
-main
+simulationFTL
 
 #TEST-DIR
 example/
 log_0121/
+compression/
+benchmark/
 output/
+dict/
+experiment/

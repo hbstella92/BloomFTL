@@ -1,5 +1,4 @@
 #!/bin/bash
 
-rm main
-gcc -o main main.c bloomfilter.c sha256.c -lm
-./main
+rm simulationFTL
+gcc -g -fsanitize=address -o simulationFTL main.c bloomfilter.c sha256.c zpipe.c -lm -lz && ./simulationFTL
