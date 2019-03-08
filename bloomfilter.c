@@ -205,12 +205,13 @@ BF* bf_cpy(BF *src){
 	memcpy(res->body,src->body,res->targetsize);
 	return res;
 }
-/*
+
 uint64_t bf_bits(BF* input) {
     return input->m;
 }
-*/
 
+
+/*
 uint64_t bf_bits(int entry, float fpr){
 	if(fpr>1) return 0;
 	uint64_t n=entry;
@@ -219,7 +220,7 @@ uint64_t bf_bits(int entry, float fpr){
 
     return m;
 }
-
+*/
 
 uint64_t bf_bytes(int entry, float fpr){
 	if(fpr>1) return 0;
