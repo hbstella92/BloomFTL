@@ -7,6 +7,10 @@
 #RUNTIME-FILE
 simulationFTL
 
+#binary file
+bf_origin.*
+origin.bin
+
 #TEST-DIR
 example/
 log_0121/

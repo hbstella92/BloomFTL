@@ -30,8 +30,8 @@
 // Compression buffer
 #define WRKMEM_SZ 10
 
-// Success probability in BF
-#define PR_SUCCESS 0.9
+// Symbol buffer
+#define MAX_SYMBUF 20
 
 int data_sz;
 uint32_t val;
@@ -72,7 +72,7 @@ typedef struct {
 } Storage;
 
 typedef struct {
-    BF* bfchip_arr;
+    BF** bfchip_arr;
 } GlobalBF;
 
 typedef struct {
@@ -82,7 +82,7 @@ typedef struct {
     uint64_t*** bytes_arr;
 } BFManager;
 
-GlobalBF*** global_bf;
+GlobalBF** global_bf;
 BFManager* bf_man;
 
 Storage storage;
@@ -103,18 +103,20 @@ Compbuf*** checkbuf;
 // Symbol table
 typedef struct {
     char* symbol_body; // Representing BF bits with symbol
-    int delim; // Maximum index in each symbol
+    int* delim; // End of each symbol
 } STable;
 
 typedef struct {
-    uint64_t* size_in_chip; // # of symbol bits in 1 chip
-    uint64_t** size_in_blk; // # of symbol bits in 1 block
-    uint64_t*** size_in_pg; // # of symbol bits in 1 page
-    uint64_t total_size; // whole symbol table size
-} STableManager;
+    // Unit: bit
+    uint64_t* sym_bits_chip;
+    uint64_t** sym_bits_blk;
+    uint64_t sym_bits_total;
+} SManager;
 
-STable*** sym_table;
-STableManager* st_man;
+STable** sym_table; // per block
+SManager* st_man;
+
+char* sym_buf;
 
 void bloom_init() {
     double true_p=0.0, false_p=0.0;
@@ -146,26 +148,20 @@ void bloom_init() {
     }
 
     // Alloc && Initialize GlobalBF
-    global_bf = (GlobalBF***)malloc(sizeof(GlobalBF**) * CHIP);
+    global_bf = (GlobalBF**)malloc(sizeof(GlobalBF*) * CHIP);
     for(int c=0; c<CHIP; c++) {
-        global_bf[c] = (GlobalBF**)malloc(sizeof(GlobalBF*) * BLOCK_PER_CHIP);
+        global_bf[c] = (GlobalBF*)malloc(sizeof(GlobalBF) * BLOCK_PER_CHIP);
+
         for(int b=0; b<BLOCK_PER_CHIP; b++) {
-            global_bf[c][b] = (GlobalBF*)malloc(sizeof(GlobalBF) * PAGE_PER_BLOCK);
+            global_bf[c][b].bfchip_arr = bf_init(1, PAGE_PER_BLOCK);
+
             for(int p=0; p<PAGE_PER_BLOCK; p++) {
                 if(p == 0) {
-                    false_p = 0.0001;
-                    global_bf[c][b][p].bfchip_arr = bf_init(1, false_p);
-
                     bf_man->bits_per_pg[c][b][p] = 0;
                     bf_man->bytes_arr[c][b][p] = 0;
                 }
                 else {
-                    true_p = pow(PR_SUCCESS, (double)1/p);
-                    false_p = 1 - true_p;
-                    global_bf[c][b][p].bfchip_arr = bf_init(1, false_p);
-
-                    bf_man->bits_per_pg[c][b][p] = bf_bits(global_bf[c][b][p].bfchip_arr);
-                    //bf_man->bits_per_pg[c][b][p] = bf_bits(1, false_p);
+                    bf_man->bits_per_pg[c][b][p] = bf_bits(global_bf[c][b].bfchip_arr[p]);
 
                     int targetsize = bf_man->bits_per_pg[c][b][p] / 8;
                     if(bf_man->bits_per_pg[c][b][p] % 8) {
@@ -173,11 +169,6 @@ void bloom_init() {
                     }
                     bf_man->bytes_arr[c][b][p] = targetsize;
                 }
-//                printf("entry #: %d\tfalse p: %f\tbit #: %d\tfunc #: %u\n", \
-                        global_bf[c][b][p].bfchip_arr->n, \
-                        global_bf[c][b][p].bfchip_arr->p, \
-                        global_bf[c][b][p].bfchip_arr->m, \
-                        global_bf[c][b][p].bfchip_arr->k);
 
                 bf_man->bits_per_blk[c][b] += bf_man->bits_per_pg[c][b][p];
             }
@@ -262,12 +253,11 @@ void bloom_destroy() {
             free(bf_man->bits_per_pg[c][b]);
             
             for(int p=0; p<PAGE_PER_BLOCK; p++) {
-                bf_free(global_bf[c][b][p].bfchip_arr);
-
                 free(compbuf[c][b][p].comp_arr);
                 free(decompbuf[c][b][p].comp_arr);
             }
-            free(global_bf[c][b]);
+
+            bf_free(global_bf[c][b].bfchip_arr, PAGE_PER_BLOCK);
 
             free(compbuf[c][b]);
             free(decompbuf[c][b]);
@@ -372,6 +362,75 @@ uint32_t generate_lba(char req, char* pttr) {
     }
 }
 
+uint64_t cal_combination(uint64_t bits, uint32_t func) {
+    uint64_t n = bits; uint64_t r = func;
+
+    if(r > n-r) {
+        r = n-r;
+    }
+
+    uint64_t up = 1; uint64_t down = 1;
+    uint64_t t = r; uint64_t i = 0;
+    
+    while(t--) {
+        up *= (n-i);
+        down *= (r-i);
+        i++;
+    }
+    
+    return (up / down);
+}
+
+void print_bytes_as_bits(unsigned char* val, size_t bytes) {
+    for(int i=0; i<bytes; i++) {
+        for(int j=7; j>=0; j--) {
+            printf("%c", (val[i] & (1 << j)) ? '1' : '0');
+        } printf(" ");
+    } printf("\n");
+}
+
+/*
+uint64_t symbol_find(unsigned char* val, size_t bytes, uint32_t k) {
+    uint64_t symb = 0;
+
+    for(int i=bytes-1; i>=0; i--) {
+        for(int j=7; j>=0; j--) {
+            if(!(val[i] & (1 << j))) {
+                symb += cal_combination(i*8+j, k-1);
+            } else {
+                k--;
+                if(k == 0) break;
+            }
+        }
+        if(k == 0) break;
+    }
+    return symb;
+}
+*/
+
+/*
+void symbol_set(uint32_t symb, size_t bytes, int offset) {
+    int bit_len = sym_table[0][0][offset].delim - 1;
+    int len = sym_table[0][0][offset].delim; // 10
+    uint32_t i = symb / 256;
+    int j=7;
+
+    while(symb != 0) {
+        if(symb % 2) {
+            sym_table[0][0][offset].symbol_body[i] |= (1 << (i*8+7-j));
+        }
+        
+        symb /= 2;
+        j--;
+
+        if(!(j % 8)) {
+            i--;
+            j = 7;
+        }
+    }
+}
+*/
+
 void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
     uint32_t pbn, key, hashkey;
     int chip, way, chnl, blk, offset;
@@ -391,11 +450,31 @@ void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
             break;
         }
     }
-    
+
+    // Do not have to make bfchip_arr of page 0 (OPTIMIZATION)
     key = lba + offset;
     hashkey = hashing_key(key);
-    bf_set(global_bf[chip][blk][offset].bfchip_arr, hashkey);
-    
+    bf_set(global_bf[chip][blk].bfchip_arr, offset, hashkey);
+
+/*
+ * Symbol table
+ *
+    if(offset != 0) {
+        uint64_t bits = bf_bits(global_bf[chip][blk][offset].bfchip_arr);
+        uint64_t bytes = bits / 8;
+        if(bits % 8) {
+            bytes++;
+        }
+        uint32_t func = bf_func(global_bf[chip][blk][offset].bfchip_arr);
+        //unsigned char* sym_buf = (unsigned char*)malloc(sizeof(unsigned char) * bytes);
+        unsigned char* sym_buf = (unsigned char*)global_bf[chip][blk][offset].bfchip_arr->body;
+        
+        uint64_t symb = symbol_find((unsigned char*)sym_buf, bytes, func);
+        //symbol_set(symb, bytes, offset);
+printf("page: %d\tbits: %lu\tsymb: %lu\n", offset, bits, symb);
+    }
+*/
+
 /*
  * Compression with zlib
  *
@@ -455,8 +534,7 @@ void bloom_read(uint32_t lba) {
         }
 */
         // Bloomfilter says true
-        //if(bf_check((BF*)decompbuf[chip][blk][idx].comp_arr, hashkey) == true) {
-        if(bf_check(global_bf[chip][blk][idx].bfchip_arr, hashkey) == true) {
+        if(bf_check(global_bf[chip][blk].bfchip_arr, idx, hashkey) == true) {
             if(storage.chip_arr[way][chnl].data_blk[blk].oob[idx] == lba) { // Data exists
                 found_cnt++;
                 reading[read_cnt].lbanum = lba;
@@ -477,58 +555,35 @@ void bloom_read(uint32_t lba) {
     }
 }
 
-int cal_combination(uint64_t bits, uint32_t func) {
-    int n=(int)bits; int r=(int)func;
-
-    if(r > n-r) {
-        r = n-r;
-    }
-
-    int up=1, down=1, t=r, i=0;
-    while(t--) {
-        up *= (n-i);
-        down *= (r-i);
-        i++;
-    }
-    
-    return (up / down);
-}
-
 void symbol_init() {
     // Allocate SymbolTable && its manager
-    sym_table = (STable***)malloc(sizeof(STable**) * CHIP);
+    sym_table = (STable**)malloc(sizeof(STable*) * CHIP);
     
-    st_man = (STableManager*)malloc(sizeof(STableManager));
-    st_man->size_in_chip = (uint64_t*)malloc(sizeof(uint64_t) * CHIP);
-    st_man->size_in_blk = (uint64_t**)malloc(sizeof(uint64_t*) * CHIP);
-    st_man->size_in_pg = (uint64_t***)malloc(sizeof(uint64_t**) * CHIP);
-    st_man->total_size = 0;
+    st_man = (SManager*)malloc(sizeof(SManager));
+    st_man->sym_bits_chip = (uint64_t*)malloc(sizeof(uint64_t) * CHIP);
+    st_man->sym_bits_blk = (uint64_t**)malloc(sizeof(uint64_t*) * CHIP);
+    st_man->sym_bits_total = 0;
 
     for(int c=0; c<CHIP; c++) {
-        sym_table[c] = (STable**)malloc(sizeof(STable*) * BLOCK_PER_CHIP);
+        sym_table[c] = (STable*)malloc(sizeof(STable) * BLOCK_PER_CHIP);
         
-        st_man->size_in_chip[c] = 0;
-        st_man->size_in_blk[c] = (uint64_t*)malloc(sizeof(uint64_t) * BLOCK_PER_CHIP);
-        st_man->size_in_pg[c] = (uint64_t**)malloc(sizeof(uint64_t*) * BLOCK_PER_CHIP);
+        st_man->sym_bits_chip[c] = 0;
+        st_man->sym_bits_blk[c] = (uint64_t*)malloc(sizeof(uint64_t) * BLOCK_PER_CHIP);
 
         for(int b=0; b<BLOCK_PER_CHIP; b++) {
-            sym_table[c][b] = (STable*)malloc(sizeof(STable) * PAGE_PER_BLOCK);
+            sym_table[c][b].delim = (int*)malloc(sizeof(int) * PAGE_PER_BLOCK);
 
-            st_man->size_in_blk[c][b] = 0;
-            st_man->size_in_pg[c][b] = (uint64_t*)malloc(sizeof(uint64_t) * PAGE_PER_BLOCK);
-
-            // Page 0 should not have both BF and ST
-            sym_table[c][b][0].symbol_body = NULL;
-            st_man->size_in_pg[c][b][0] = 0;
+            st_man->sym_bits_blk[c][b] = 0;
 
             // Calculate symbol table size
-            int bit_count=0, comb, bit_for_comb, sum_of_bits=0;
-            uint32_t func;
-            BF* prev_bf = global_bf[c][b][0].bfchip_arr;
+            int bit_count=0, bit_for_comb, sum_of_bits=0;
+            uint32_t func, comb;
+            BF* prev_bf = global_bf[c][b].bfchip_arr[0];
             uint64_t prev_bits = bf_bits(prev_bf);
-
+            uint64_t total=0;
+            
             for(int p=1; p<PAGE_PER_BLOCK; p++) {
-                BF* cur_bf = global_bf[c][b][p].bfchip_arr;
+                BF* cur_bf = global_bf[c][b].bfchip_arr[p];
                 uint64_t cur_bits = bf_bits(cur_bf);
 
                 if(cur_bits != prev_bits) {
@@ -550,24 +605,19 @@ void symbol_init() {
                         sum_of_bits += (bit_count * bit_for_comb);
                     }
                 }
-
                 func = bf_func(cur_bf);
                 comb = cal_combination(cur_bits, func);
                 bit_for_comb = ceil(log(comb) / log(2));
-
-                // Build global symbol table
-                sym_table[c][b][p].symbol_body = (char*)malloc(sizeof(char) * bit_for_comb);
-                sym_table[c][b][p].delim = comb - 1;
-                //printf("PAGE %d\toriginal_bits: %ld\tsymbol_body_size: %d\n", \
-                        p, cur_bits, bit_for_comb);
-
-                st_man->size_in_pg[c][b][p] = bit_for_comb;
-                st_man->size_in_blk[c][b] += st_man->size_in_pg[c][b][p];
+                total += bit_for_comb;
+                
+                sym_table[c][b].delim[p] = total;
             }
-
-            //printf("BLOCK %d\tSymbol table size %d\n", b, sum_of_bits);
-            st_man->size_in_chip[c] += st_man->size_in_blk[c][b];
-            st_man->total_size += sum_of_bits;
+            
+            st_man->sym_bits_blk[c][b] = total;
+            st_man->sym_bits_chip[c] += st_man->sym_bits_blk[c][b];
+            st_man->sym_bits_total += sum_of_bits;
+            
+            sym_table[c][b].symbol_body = (char*)malloc(sizeof(char) * st_man->sym_bits_blk[c][b]);
         }
     }
 }
@@ -575,23 +625,17 @@ void symbol_init() {
 void symbol_destroy() {
     for(int c=0; c<CHIP; c++) {
         for(int b=0; b<BLOCK_PER_CHIP; b++) {
-            for(int p=0; p<PAGE_PER_BLOCK; p++) {
-                free(sym_table[c][b][p].symbol_body);
-            }
-            free(sym_table[c][b]);
-
-            free(st_man->size_in_pg[c][b]);
+            free(sym_table[c][b].symbol_body);
+            free(sym_table[c][b].delim);
         }
         free(sym_table[c]);
 
-        free(st_man->size_in_blk[c]);
-        free(st_man->size_in_pg[c]);
+        free(st_man->sym_bits_blk[c]);
     }
     free(sym_table);
 
-    free(st_man->size_in_chip);
-    free(st_man->size_in_blk);
-    free(st_man->size_in_pg);
+    free(st_man->sym_bits_chip);
+    free(st_man->sym_bits_blk);
     free(st_man);
 }
 
@@ -647,22 +691,28 @@ void print_stats(char* w_type, char* r_type) {
     printf("\n### SYMBOL TABLE INFO ###\n");
     sum = 0;
     for(int c=0; c<CHIP; c++) {
-        sum += st_man->size_in_chip[c];
+        sum += st_man->sym_bits_chip[c];
     }
-    printf("Sum of ST assigned bits in all chips: [%lu bits, %lu bytes]\n", sum, sum/8);
+    uint64_t targetsize = sum / 8;
+    if(sum % 8) {
+        targetsize++;
+    }
+    printf("Sum of ST assigned bits in all chips: [%lu bits, %lu bytes]\n", sum, targetsize);
 
     sum = 0;
     for(int b=0; b<BLOCK_PER_CHIP; b++) {
-        sum += st_man->size_in_blk[0][b];
+        sum += st_man->sym_bits_blk[0][b];
     }
-    printf("Sum of ST assigned bits in all blocks in 1 chip: [%lu bits, %lu bytes]\n", sum, sum/8);
-
-    sum = 0;
-    for(int p=0; p<PAGE_PER_BLOCK; p++) {
-        sum += st_man->size_in_pg[0][0][p];
+    targetsize = sum / 8;
+    if(sum % 8) {
+        targetsize++;
     }
-    printf("Sum of ST assigned bits in all pages in 1 block: [%lu bits, %lu bytes]\n", sum, sum/8);
-    printf("ALL of ST assigned: %lu bits, %lu bytes\n", st_man->total_size, st_man->total_size/8);
+    printf("Sum of ST assigned bits in all blocks in 1 chip: [%lu bits, %lu bytes]\n", sum, targetsize);
+    targetsize = st_man->sym_bits_total / 8;
+    if(st_man->sym_bits_total % 8) {
+        targetsize++;
+    }
+    printf("ALL of ST assigned: %lu bits, %lu bytes\n", st_man->sym_bits_total, targetsize);
     
     printf("\nTEST COMPLETE !!\n");
     fflush(stdout);
@@ -692,6 +742,7 @@ int main(int argc, char** argv) {
     }
     */
 
+    printf("TEST START !!\n");
     srand((unsigned int)time(NULL));
 
     val = data_sz = 0;

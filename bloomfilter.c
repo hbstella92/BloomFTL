@@ -9,6 +9,8 @@
 #define FORCE_INLINE inline
 #endif
 
+#define PR_SUCCESS 0.9
+
 extern int save_fd;
 
 void BITSET(char *input, char offset){
@@ -130,7 +132,7 @@ BF* bf_init(int entry, float fpr) {
     res->k = 1;
     res->p = fpr;
     res->m = ceil(-1 / (log(1-pow(res->p,1/1)) / log(exp(1.0))));
-printf("n: %d\tp: %f\tm: %d\tk: %u\n", res->n, res->p, res->m, res->k);
+    
     int targetsize = res->m / 8;
     //unsigned long long targetsize = res->m / 8;
     if(res->m % 8) {
@@ -163,8 +165,8 @@ else res->m = 8;
 	return res;
 }
 */
-// Original bf_init
 
+/* Original bf_init (per page)
 BF* bf_init(int entry, float fpr){
 	if(fpr>1)
 		return NULL;
@@ -181,21 +183,46 @@ BF* bf_init(int entry, float fpr){
 	res->targetsize=targetsize;
 	return res;
 }
+*/
 
+// Modified bf_init (contiguous)
+BF** bf_init(int entry, int pg_per_blk) {
+    double true_p=0.0, false_p=0.0;
+    int sum_targetsize=0;
+
+    BF** res = (BF**)malloc(sizeof(BF*) * pg_per_blk);
+    for(int p=0; p<pg_per_blk; p++) {
+        res[p] = (BF*)malloc(sizeof(BF));
+
+        res[p]->n = entry;
+        
+        if(p == 0) {
+            false_p = 0.0001;
+        } else {
+            true_p = pow(PR_SUCCESS, (double)1/p);
+            false_p = 1 - true_p;
+        }
+
+        res[p]->m = ceil((res[p]->n * log(false_p)) / log(1.0 / (pow(2.0, log(2.0)))));
+        res[p]->k = round(log(2.0) * (float)res[p]->m / res[p]->n);
+        int targetsize = res[p]->m / 8;
+        if(res[p]->m % 8) {
+            targetsize++;
+        }
+        res[p]->p = false_p;
+        res[p]->targetsize = targetsize;
+        sum_targetsize += targetsize;
+        res[p]->delim = sum_targetsize - res[p]->targetsize;
+    }
+
+    res[0]->body = (char*)malloc(sum_targetsize);
+    memset(res[0]->body, 0, sum_targetsize);
+    return res;
+}
 
 uint32_t bf_func(BF* input){
     return input->k;
 }
-
-/*
-uint32_t bf_func(int entry, float fpr){
-	BF *res=(BF*)malloc(sizeof(BF));
-	res->n=entry;
-	res->m=ceil((res->n * log(fpr)) / log(1.0 / (pow(2.0, log(2.0)))));
-	res->k=round(log(2.0) * (float)res->m / res->n);
-    return res->k;
-}
-*/
 
 BF* bf_cpy(BF *src){
 	if(src==NULL) return NULL;
@@ -210,29 +237,33 @@ uint64_t bf_bits(BF* input) {
     return input->m;
 }
 
+uint64_t bf_bytes(BF* input){
+    int bit = input->m;
+	int targetsize = bit/8;
 
-/*
-uint64_t bf_bits(int entry, float fpr){
-	if(fpr>1) return 0;
-	uint64_t n=entry;
-	uint64_t m=ceil((n * log(fpr)) / log(1.0 / (pow(2.0, log(2.0)))));
-	int targetsize=m/8;
-
-    return m;
-}
-*/
-
-uint64_t bf_bytes(int entry, float fpr){
-	if(fpr>1) return 0;
-	uint64_t n=entry;
-	uint64_t m=ceil((n * log(fpr)) / log(1.0 / (pow(2.0, log(2.0)))));
-	int targetsize=m/8;
-
-	if(m%8)
+	if(bit%8)
 		targetsize++;
 	return targetsize;
 }
 
+void bf_set(BF** input, int idx, KEYT key){
+	if(input[idx] == NULL) return;
+	
+    KEYT h;
+	int block, offset;
+
+	for(uint32_t i=0; i<input[idx]->k; i++){
+		//MurmurHash3_x86_32(&key,sizeof(key),i,&h);
+		h = hashfunction((key << 19) | (i << 7));
+		h %= input[idx]->m;
+		block = h / 8;
+		offset = h % 8;
+
+		BITSET(&input[0]->body[input[idx]->delim + block], offset);
+	}
+}
+
+/*
 void bf_set(BF *input, KEYT key){
 	if(input==NULL) return;
 	KEYT h;
@@ -249,9 +280,30 @@ void bf_set(BF *input, KEYT key){
 
 		BITSET(&input->body[block],offset);
 	}
+}
+*/
+
+bool bf_check(BF** input, int idx, KEYT key){
+	if(input[idx] == NULL) return true;
 	
+    KEYT h;
+	int block, offset;
+
+	for(uint32_t i=0; i<input[idx]->k; i++){
+		//MurmurHash3_x86_32(&key,sizeof(key),i,&h);
+		h = hashfunction((key << 19) | (i << 7));
+		h %= input[idx]->m;
+		block = h/8;
+		offset = h%8;
+
+		if(!BITGET(input[0]->body[input[idx]->delim + block], offset)){
+			return false;
+		}
+	}
+	return true;
 }
 
+/*
 bool bf_check(BF* input, KEYT key){
 	KEYT h;
 	int block,offset;
@@ -271,11 +323,23 @@ bool bf_check(BF* input, KEYT key){
 	}
 	return true;
 }
+*/
 
-void bf_free(BF *input){
+void bf_free(BF** input, int pg_per_blk){
+	free(input[0]->body);
+
+    for(int p=0; p<pg_per_blk; p++) {
+        free(input[p]);
+    }
+	free(input);
+}
+/*
+void bf_free(BF* input){
 	free(input->body);
 	free(input);
 }
+*/
+
 /*
 void bf_save(BF* input){
 	write(save_fd,input,sizeof(BF));
@@ -289,21 +353,3 @@ BF* bf_load(){
 	read(save_fd,res->body,res->targetsize);
 	return res;
 }*/
-/*
-   int main(){
-   int check=0;
-   printf("test\n");
-   BF *test=bf_init(KEYNUM,0.01);
-   for(int i=0; i<1024; i++){
-   bf_set(test,i);
-   }
-
-   for(int i=0; i<100000; i++){
-   if(bf_check(test,i)){
-   printf("%d\n",i);
-   check++;
-   }
-   }
-
-   printf("%d\n",check);
-   }*/
