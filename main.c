@@ -163,11 +163,11 @@ void bloom_init() {
                 else {
                     bf_man->bits_per_pg[c][b][p] = bf_bits(global_bf[c][b].bfchip_arr[p]);
 
-                    int targetsize = bf_man->bits_per_pg[c][b][p] / 8;
+                    int bytes = bf_man->bits_per_pg[c][b][p] / 8;
                     if(bf_man->bits_per_pg[c][b][p] % 8) {
-                        targetsize++;
+                        bytes++;
                     }
-                    bf_man->bytes_arr[c][b][p] = targetsize;
+                    bf_man->bytes_arr[c][b][p] = bytes;
                 }
 
                 bf_man->bits_per_blk[c][b] += bf_man->bits_per_pg[c][b][p];
@@ -452,9 +452,11 @@ void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
     }
 
     // Do not have to make bfchip_arr of page 0 (OPTIMIZATION)
-    key = lba + offset;
-    hashkey = hashing_key(key);
-    bf_set(global_bf[chip][blk].bfchip_arr, offset, hashkey);
+    if(offset != 0) {
+        key = lba + offset;
+        hashkey = hashing_key(key);
+        bf_set(global_bf[chip][blk].bfchip_arr, offset, hashkey);
+    }
 
 /*
  * Symbol table
@@ -515,7 +517,7 @@ void bloom_read(uint32_t lba) {
     blk = pbn % BLOCK_PER_CHIP;
     offset = storage.chip_arr[way][chnl].data_blk[blk].empty;
 
-    for(int idx=offset-1; idx>=0; idx--) {
+    for(int idx=offset-1; idx>0; idx--) {
         key = lba + idx;
         hashkey = hashing_key(key);
 
@@ -552,6 +554,17 @@ void bloom_read(uint32_t lba) {
         else { // Data should not exist
             false_cnt++;
         }
+    }
+
+    // Case of page offset 0
+    if(storage.chip_arr[way][chnl].data_blk[blk].oob[0] != lba) {
+        printf("This should not happen !!\n");
+        exit(1);
+    } else {
+        found_cnt++;
+        reading[read_cnt].lbanum = lba;
+        reading[read_cnt].level = offset - 0;
+        reading[read_cnt].found++;
     }
 }
 
@@ -616,8 +629,12 @@ void symbol_init() {
             st_man->sym_bits_blk[c][b] = total;
             st_man->sym_bits_chip[c] += st_man->sym_bits_blk[c][b];
             st_man->sym_bits_total += sum_of_bits;
+            uint64_t targetsize = st_man->sym_bits_blk[c][b] / 8;
+            if(st_man->sym_bits_blk[c][b] % 8) {
+                targetsize++;
+            }
             
-            sym_table[c][b].symbol_body = (char*)malloc(sizeof(char) * st_man->sym_bits_blk[c][b]);
+            sym_table[c][b].symbol_body = (char*)malloc(sizeof(char) * targetsize);
         }
     }
 }
@@ -665,12 +682,17 @@ void print_stats(char* w_type, char* r_type) {
     printf("RAF: %.2f\n", (double)(found_cnt + notfound_cnt) / read_cnt);
 
     printf("\n### BLOOMFILTER INFO ###\n");
+    uint64_t bytes = 0;
     uint64_t total_bits = 0;
     printf("Sum of BF assigned bits in all chips: ");
     for(int c=0; c<CHIP; c++) {
         sum += bf_man->bits_per_chip[c];
     }
-    printf("[%lu bits, %lu bytes]\n", sum, sum/8);
+    bytes = sum / 8;
+    if(sum % 8) {
+        bytes++;
+    }
+    printf("[%lu bits, %lu bytes]\n", sum, bytes);
     total_bits = sum;
     
     sum = 0;
@@ -678,16 +700,29 @@ void print_stats(char* w_type, char* r_type) {
     for(int b=0; b<BLOCK_PER_CHIP; b++) {
         sum += bf_man->bits_per_blk[0][b];
     }
-    printf("[%lu bits, %lu bytes]\n", sum, sum/8);
+    bytes = sum / 8;
+    if(sum % 8) {
+        bytes++;
+    }
+    printf("[%lu bits, %lu bytes]\n", sum, bytes);
     
     sum = 0;
     printf("Sum of BF assigned bits in all pages in 1 block: ");
     for(int p=0; p<PAGE_PER_BLOCK; p++) {
         sum += bf_man->bits_per_pg[0][0][p];
     }
-    printf("[%lu bits, %lu bytes]\n", sum, sum/8);
-    printf("ALL of BF assigned: %lu bits, %lu bytes\n", total_bits, total_bits/8);
-
+    bytes = sum / 8;
+    if(sum % 8) {
+        bytes++;
+    }
+    printf("[%lu bits, %lu bytes]\n", sum, bytes);
+    
+    bytes = total_bits / 8;
+    if(total_bits % 8) {
+        bytes++;
+    }
+    printf("ALL of BF assigned: %lu bits, %lu bytes\n", total_bits, bytes);
+/*
     printf("\n### SYMBOL TABLE INFO ###\n");
     sum = 0;
     for(int c=0; c<CHIP; c++) {
@@ -713,7 +748,7 @@ void print_stats(char* w_type, char* r_type) {
         targetsize++;
     }
     printf("ALL of ST assigned: %lu bits, %lu bytes\n", st_man->sym_bits_total, targetsize);
-    
+*/    
     printf("\nTEST COMPLETE !!\n");
     fflush(stdout);
 }
@@ -731,7 +766,7 @@ int main(int argc, char** argv) {
     }
 
     bloom_init();
-    symbol_init();
+    //symbol_init();
 
     /*
      * TRADITIONAL BF
@@ -763,7 +798,7 @@ int main(int argc, char** argv) {
 
     print_stats(argv[1], argv[2]);
 
-    symbol_destroy();
+    //symbol_destroy();
     bloom_destroy();
 
     /*

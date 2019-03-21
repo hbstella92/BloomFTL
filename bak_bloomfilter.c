@@ -146,7 +146,7 @@ BF* bf_init(int entry, float fpr) {
 }
 */
 
-/* Original bf_init (BF is assigned per page)
+/* Original bf_init (BF is initialized per page)
 BF* bf_init(int entry, float fpr){
 	if(fpr>1)
 		return NULL;
@@ -165,44 +165,7 @@ BF* bf_init(int entry, float fpr){
 }
 */
 
-// Modified bf_init (BFs are assigned contiguously)
-BF** bf_init(int entry, int pg_per_blk) {
-    double true_p=0.0, false_p=0.0;
-    uint64_t sum_bits=0;
-
-    BF** res = (BF**)malloc(sizeof(BF*) * pg_per_blk);
-    for(int p=0; p<pg_per_blk; p++) {
-        res[p] = (BF*)malloc(sizeof(BF));
-        if(p == 0) {
-            continue;
-        }
-
-        res[p]->n = entry;
-
-        true_p = pow(PR_SUCCESS, (double)1/p);
-        false_p = 1 - true_p;
-
-        res[p]->m = ceil((res[p]->n * log(false_p)) / log(1.0 / (pow(2.0, log(2.0)))));
-        res[p]->k = round(log(2.0) * (float)res[p]->m / res[p]->n);
-        res[p]->targetsize = res[p]->m / 8;
-        if(res[p]->m % 8) {
-            res[p]->targetsize++;
-        }
-        res[p]->p = false_p;
-        sum_bits += res[p]->m;
-        res[p]->start = sum_bits - res[p]->m;
-    }
-
-    uint64_t sum_bytes = sum_bits / 8;
-    if(sum_bits % 8) {
-        sum_bytes++;
-    }
-    res[0]->body = (char*)malloc(sum_bytes);
-    memset(res[0]->body, 0, sum_bytes);
-    return res;
-}
-
-/* Modified bf_init (BFs are assigned contiguously)
+// Modified bf_init (contiguous)
 BF** bf_init(int entry, int pg_per_blk) {
     double true_p=0.0, false_p=0.0;
     int sum_targetbits=0;
@@ -237,15 +200,13 @@ BF** bf_init(int entry, int pg_per_blk) {
     memset(res[0]->body, 0, sum_targetbits);
     return res;
 }
-*/
 
-uint32_t bf_func(BF* input) {
+uint32_t bf_func(BF* input){
     return input->k;
 }
 
-BF* bf_cpy(BF *src) {
-	if(src == NULL) return NULL;
-
+BF* bf_cpy(BF *src){
+	if(src==NULL) return NULL;
 	BF* res=(BF*)malloc(sizeof(BF));
 	memcpy(res,src,sizeof(BF));
 	res->body=(char *)malloc(res->targetsize);
@@ -257,7 +218,7 @@ uint64_t bf_bits(BF* input) {
     return input->m;
 }
 
-uint64_t bf_bytes(BF* input) {
+uint64_t bf_bytes(BF* input){
     uint64_t bytes = input->m / 8;
     if(input->m % 8) {
         bytes++;
@@ -266,48 +227,44 @@ uint64_t bf_bytes(BF* input) {
 	return bytes;
 }
 
-void bf_set(BF** input, int idx, KEYT key) {
+void bf_set(BF** input, int idx, KEYT key){
 	if(input[idx] == NULL) return;
 	
     KEYT h;
 	int block, offset;
-    uint64_t start = input[idx]->start;
-	
-    for(uint32_t i=0; i<input[idx]->k; i++){
-		//MurmurHash3_x86_32(&key,sizeof(key),i,&h);
-		h = hashfunction((key << 19) | (i << 7));
-		h %= input[idx]->m;
-
-		block = (start + h) / 8;
-		offset = (start + h) % 8;
-
-		BITSET(&input[0]->body[block], offset);
-	}
-}
-
-bool bf_check(BF** input, int idx, KEYT key) {
-	if(input[idx] == NULL) return true;
-	
-    KEYT h;
-	int block, offset;
-    uint64_t start = input[idx]->start;
 
 	for(uint32_t i=0; i<input[idx]->k; i++){
 		//MurmurHash3_x86_32(&key,sizeof(key),i,&h);
 		h = hashfunction((key << 19) | (i << 7));
 		h %= input[idx]->m;
+		block = h / 8;
+		offset = h % 8;
 
-		block = (start + h) / 8;
-		offset = (start + h) % 8;
+		BITSET(&input[0]->body[input[idx]->delim + block], offset);
+	}
+}
 
-		if(!BITGET(input[0]->body[block], offset)){
+bool bf_check(BF** input, int idx, KEYT key){
+	if(input[idx] == NULL) return true;
+	
+    KEYT h;
+	int block, offset;
+
+	for(uint32_t i=0; i<input[idx]->k; i++){
+		//MurmurHash3_x86_32(&key,sizeof(key),i,&h);
+		h = hashfunction((key << 19) | (i << 7));
+		h %= input[idx]->m;
+		block = h/8;
+		offset = h%8;
+
+		if(!BITGET(input[0]->body[input[idx]->delim + block], offset)){
 			return false;
 		}
 	}
 	return true;
 }
 
-void bf_free(BF** input, int pg_per_blk) {
+void bf_free(BF** input, int pg_per_blk){
 	free(input[0]->body);
 
     for(int p=0; p<pg_per_blk; p++) {
