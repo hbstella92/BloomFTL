@@ -14,11 +14,11 @@ typedef struct{
 	float p;
 	char *body;
     uint64_t start; // Start index of BF
-    //int delim;
 }BF;
 
 BF** bf_init(int entry, int pg_per_blk);
-void bf_set(BF** input, int idx, KEYT key);
+int bf_set(BF** input, int idx, KEYT key);
+bool symbol_check(BF** input, int idx, KEYT key, int internal_idx, int start);
 bool bf_check(BF** input, int idx, KEYT key);
 void bf_free(BF** input, int pg_per_blk);
 

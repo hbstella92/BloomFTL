@@ -1,6 +1,9 @@
 #LOGS
 *.txt
 
+#CTAGS
+tags
+
 #SWAP-FILE
 *.swp
 

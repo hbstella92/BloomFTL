@@ -123,10 +123,47 @@ KEYT hashfunction(KEYT key){
 	return key;
 }
 
-/* Compressible bf_init (# of hash func is set to 1)
+// Compressible bf_init (# of hash func is set to 1)
+BF** bf_init(int entry, int pg_per_blk) {
+    double true_p=0.0, false_p=0.0;
+    uint64_t sum_bits=0;
+
+    BF** res = (BF**)malloc(sizeof(BF*) * pg_per_blk);
+
+    for(int p=0; p<pg_per_blk; p++) {
+        res[p] = (BF*)malloc(sizeof(BF));
+        if(p == 0) {
+            res[p]->start = 0;
+            continue;
+        }
+
+        res[p]->n = entry;
+        res[p]->k = 1;
+
+        true_p = pow(PR_SUCCESS, (double)1/p);
+        false_p = 1 - true_p;
+        res[p]->p = false_p;
+        res[p]->m = ceil(-1 / (log(1-pow(res[p]->p,1/1)) / log(exp(1.0))));
+        res[p]->targetsize = res[p]->m / 8;
+        if(res[p]->m % 8) {
+            res[p]->targetsize++;
+        }
+        sum_bits += res[p]->m;
+        res[p]->start = sum_bits - res[p]->m;
+    }
+
+    uint64_t sum_bytes = sum_bits / 8;
+    if(sum_bits % 8) {
+        sum_bytes++;
+    }
+    res[0]->body = (char*)malloc(sum_bytes);
+    memset(res[0]->body, 0, sum_bytes);
+    return res;
+}
+
+/* Compressible bf_init (previous)
 BF* bf_init(int entry, float fpr) {
     if(fpr > 1) { return NULL; }
-
     BF* res = (BF*)malloc(sizeof(BF));
     res->n = entry;
     res->k = 1;
@@ -165,7 +202,7 @@ BF* bf_init(int entry, float fpr){
 }
 */
 
-// Modified bf_init (BFs are assigned contiguously)
+/* Modified bf_init (BFs are assigned contiguously)
 BF** bf_init(int entry, int pg_per_blk) {
     double true_p=0.0, false_p=0.0;
     uint64_t sum_bits=0;
@@ -181,7 +218,7 @@ BF** bf_init(int entry, int pg_per_blk) {
 
         true_p = pow(PR_SUCCESS, (double)1/p);
         false_p = 1 - true_p;
-
+        
         res[p]->m = ceil((res[p]->n * log(false_p)) / log(1.0 / (pow(2.0, log(2.0)))));
         res[p]->k = round(log(2.0) * (float)res[p]->m / res[p]->n);
         res[p]->targetsize = res[p]->m / 8;
@@ -201,6 +238,7 @@ BF** bf_init(int entry, int pg_per_blk) {
     memset(res[0]->body, 0, sum_bytes);
     return res;
 }
+*/
 
 /* Modified bf_init (BFs are assigned contiguously)
 BF** bf_init(int entry, int pg_per_blk) {
@@ -266,27 +304,54 @@ uint64_t bf_bytes(BF* input) {
 	return bytes;
 }
 
-void bf_set(BF** input, int idx, KEYT key) {
-	if(input[idx] == NULL) return;
+int bf_set(BF** input, int idx, KEYT key) {
+	if(input[idx] == NULL) return -1;
 	
     KEYT h;
 	int block, offset;
     uint64_t start = input[idx]->start;
-	
+    int global_bf_idx=0;
+    
     for(uint32_t i=0; i<input[idx]->k; i++){
 		//MurmurHash3_x86_32(&key,sizeof(key),i,&h);
 		h = hashfunction((key << 19) | (i << 7));
 		h %= input[idx]->m;
-
+        
+        // h to binary and symbolized
 		block = (start + h) / 8;
 		offset = (start + h) % 8;
-
-		BITSET(&input[0]->body[block], offset);
+        
+        BITSET(&input[0]->body[block], offset);
+        global_bf_idx = 8 * block + offset;
+        //global_bf_idx = 8 * block + (7 - offset);
 	}
+    return global_bf_idx; // return value: global idx of BF
+}
+
+bool symbol_check(BF** input, int idx, KEYT key, int internal_idx, int start) {
+    if(input[idx] == NULL) return false;
+
+    KEYT h;
+    int block, offset;
+    int global_bf_idx = start + internal_idx;
+    
+    for(uint32_t i=0; i<input[idx]->k; i++) {
+        h = hashfunction((key << 19) | (i << 7));
+        h %= input[idx]->m;
+        
+        block = (start + h) / 8;
+        offset = (start + h) % 8;
+        
+        if(global_bf_idx != 8*block+offset) {
+        //if(global_bf_idx != (8*block+(7-offset))) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool bf_check(BF** input, int idx, KEYT key) {
-	if(input[idx] == NULL) return true;
+	if(input[idx] == NULL) return false;
 	
     KEYT h;
 	int block, offset;
@@ -299,8 +364,8 @@ bool bf_check(BF** input, int idx, KEYT key) {
 
 		block = (start + h) / 8;
 		offset = (start + h) % 8;
-
-		if(!BITGET(input[0]->body[block], offset)){
+        
+        if(!BITGET(input[0]->body[block], offset)){
 			return false;
 		}
 	}
