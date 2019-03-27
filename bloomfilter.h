@@ -18,7 +18,7 @@ typedef struct{
 
 BF** bf_init(int entry, int pg_per_blk);
 int bf_set(BF** input, int idx, KEYT key);
-bool symbol_check(BF** input, int idx, KEYT key, int internal_idx, int start);
+bool symbol_check(BF** input, int idx, KEYT key, char* symbol, int symb_length, int front_byte, int front_bit, int start, uint32_t* symb_arr, int symb_arr_sz);
 bool bf_check(BF** input, int idx, KEYT key);
 void bf_free(BF** input, int pg_per_blk);
 

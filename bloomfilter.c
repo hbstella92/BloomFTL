@@ -16,6 +16,7 @@ extern int save_fd;
 void BITSET(char *input, char offset){
 	char test=1;
 	test<<=offset;
+if(input == NULL) {exit(0);}
 	(*input)|=test;
 }
 bool BITGET(char input, char offset){
@@ -132,14 +133,18 @@ BF** bf_init(int entry, int pg_per_blk) {
 
     for(int p=0; p<pg_per_blk; p++) {
         res[p] = (BF*)malloc(sizeof(BF));
+       
         if(p == 0) {
+        //if((p / 2) == 0) {
             res[p]->start = 0;
+            res[p]->m = 0;
             continue;
         }
 
         res[p]->n = entry;
         res[p]->k = 1;
 
+        //true_p = pow(PR_SUCCESS, (double)1/((p / 2) + 1));
         true_p = pow(PR_SUCCESS, (double)1/p);
         false_p = 1 - true_p;
         res[p]->p = false_p;
@@ -328,13 +333,97 @@ int bf_set(BF** input, int idx, KEYT key) {
     return global_bf_idx; // return value: global idx of BF
 }
 
-bool symbol_check(BF** input, int idx, KEYT key, int internal_idx, int start) {
+bool symbol_check(BF** input, int idx, KEYT key, char* symbol, int symb_length, int front_byte, int front_bit, int start, uint32_t* symb_arr, int symb_arr_sz) {
     if(input[idx] == NULL) return false;
 
     KEYT h;
     int block, offset;
-    int global_bf_idx = start + internal_idx;
+//    int global_bf_idx = start + internal_idx;
+    int mask, shift;
+    int chunk_sz = ((((front_bit / 8) + 1) * 8) - front_bit);
+    int first_chunk_flag=1;
+    int last_chunk_flag=0;
+    int remain_chunk = symb_length;
+    int chunk_cnt=0;
+    uint32_t comp_symb;
+    int next_chunk_sz = remain_chunk - chunk_sz;
+
+    if(next_chunk_sz <= 0) {
+        chunk_sz = symb_length;
+        next_chunk_sz = 0;
+    }
+
+    for(int i=0; i<symb_arr_sz; i++) {
+        memcpy(&symb_arr[i], &symbol[front_byte+i], 1);
+
+        if(first_chunk_flag) {
+            if(remain_chunk < 8) {
+                if(next_chunk_sz == 0) {
+                    if(!((front_bit + chunk_sz) % 8)) {
+                        mask = ((1 << chunk_sz) - 1);
+                        
+                        symb_arr[i] &= mask;
+                    } else {
+                        shift = 8 - front_bit - chunk_sz;
+                        mask = ((1 << chunk_sz) - 1);
+
+                        symb_arr[i] >>= shift;
+                        symb_arr[i] &= mask;
+                    }
+                } else {
+                    mask = ((1 << chunk_sz) - 1);
+                    shift = next_chunk_sz;
+
+                    symb_arr[i] &= mask;
+                    symb_arr[i] <<= shift;
+                }
+            } else if(chunk_sz < 8) {
+                mask = ((1 << chunk_sz) - 1);
+                shift = symb_length - chunk_sz;
+
+                symb_arr[i] &= mask;
+                symb_arr[i] <<= shift;
+            } else {
+                shift = symb_length - chunk_sz;
+
+                symb_arr[i] <<= shift;
+            }
+            
+            first_chunk_flag = 0;
+        } else {
+            if(last_chunk_flag) {
+                if(chunk_sz < 8) {
+                    shift = 8 - chunk_sz;
+
+                    symb_arr[i] >>= shift;
+                }
+            } else {
+                shift = next_chunk_sz;
+                symb_arr[i] <<= shift;
+            }
+        }
+        remain_chunk -= chunk_sz;
+        front_bit += chunk_sz;
+
+        if(remain_chunk < 8) {
+            last_chunk_flag = 1;
+        }
+        
+        if(remain_chunk >= 8) {
+            chunk_sz = 8;
+            next_chunk_sz -= 8;
+        } else {
+            chunk_sz = remain_chunk;
+        }
+        chunk_cnt++;
+    }
     
+    uint32_t test;
+    memset(&test, 0, sizeof(uint32_t));
+    for(int i=0; i<chunk_cnt; i++) {
+        test |= symb_arr[i];
+    }
+
     for(uint32_t i=0; i<input[idx]->k; i++) {
         h = hashfunction((key << 19) | (i << 7));
         h %= input[idx]->m;
@@ -342,11 +431,14 @@ bool symbol_check(BF** input, int idx, KEYT key, int internal_idx, int start) {
         block = (start + h) / 8;
         offset = (start + h) % 8;
         
-        if(global_bf_idx != 8*block+offset) {
-        //if(global_bf_idx != (8*block+(7-offset))) {
+        comp_symb = 8 * block + offset;
+
+        if(start+test != comp_symb) {
+        //if(global_bf_idx != 8*block+offset) {
             return false;
         }
     }
+
     return true;
 }
 

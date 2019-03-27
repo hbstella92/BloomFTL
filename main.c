@@ -33,6 +33,7 @@
 
 // Symbol buffer
 #define MAX_SYMBUF 20
+#define SYMBOL_MASK(n) ((1 << (n+1)) - 1)
 
 int data_sz;
 uint32_t val;
@@ -155,6 +156,7 @@ void bloom_init() {
             global_bf[c][b].bfchip_arr = bf_init(1, PAGE_PER_BLOCK);
 
             for(int p=0; p<PAGE_PER_BLOCK; p++) {
+                //if((p / 2) == 0) {
                 if(p == 0) {
                     bf_man->bits_per_pg[c][b][p] = 0;
                     bf_man->bytes_arr[c][b][p] = 0;
@@ -326,7 +328,11 @@ uint32_t generate_lba(char req, char* pttr) {
         if(!strcmp(pttr, "SEQ")) {
             return val;
         }
-        else { // Random and uniform
+        else {
+            // Random and duplicated
+            return rand() % DATA_SET;
+            /*
+            // Random and uniform
             uint32_t nodup_rand_val = rand() % DATA_SET;
             int idx;
             while(1) {
@@ -341,6 +347,7 @@ uint32_t generate_lba(char req, char* pttr) {
                     return nodup_rand_val;
                 }
             }
+            */
         }
     }
     else if(req == 'R') {
@@ -393,7 +400,7 @@ void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
     int chip, way, chnl, blk, offset;
     int global_bf_idx;
     int internal_bf_idx;
-
+//printf("WR LBA %u\n", lba);
     while(1) {
         pbn = (lba & MASK);
         chip = pbn / BLOCK_PER_CHIP;
@@ -409,8 +416,9 @@ void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
             break;
         }
     }
-    
+//printf("LBA: %u\n", lba);    
     // Do not have to make bfchip_arr of page 0 (OPTIMIZATION)
+    //if(offset > 1) {
     if(offset != 0) {
         key = lba + offset;
         hashkey = hashing_key(key);
@@ -469,7 +477,7 @@ void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
 void bloom_read(uint32_t lba) {
     uint32_t pbn, key, hashkey;
     int chip, way, chnl, blk, offset;
-//printf("LBA %u\n", lba);
+//printf("RD LBA %u", lba);
     pbn = (lba & MASK);
     chip = pbn / BLOCK_PER_CHIP;
     way = chip / CHANNEL;
@@ -478,6 +486,7 @@ void bloom_read(uint32_t lba) {
     offset = storage.chip_arr[way][chnl].data_blk[blk].empty;
     int internal_bf_idx = 0;
     
+    //for(int idx=offset-1; idx>1; idx--) {
     for(int idx=offset-1; idx>0; idx--) {
         key = lba + idx;
         hashkey = hashing_key(key);
@@ -504,9 +513,17 @@ void bloom_read(uint32_t lba) {
         
         int symb_front_gidx = start[idx];
         int symb_end_gidx = symb_front_gidx + st_man->sym_bits_pg[idx] - 1;
-        
+
+        int front_byte = start[idx] / 8;
+        int front_bit = start[idx] % 8;
+        int end_byte = (start[idx] + st_man->sym_bits_pg[idx] - 1) / 8;
+        int symb_arr_sz = end_byte - front_byte + 1;
+        uint32_t* symb_arr = (uint32_t*)malloc(sizeof(uint32_t) * (end_byte - front_byte + 1));
+        memset(symb_arr, 0, sizeof(uint32_t) * symb_arr_sz);
+
         int byte, bit;
         int j=0;
+
         while(symb_end_gidx >= symb_front_gidx) {
             byte = symb_end_gidx / 8;
             bit = 7 - (symb_end_gidx % 8);
@@ -517,23 +534,29 @@ void bloom_read(uint32_t lba) {
 
             symb_end_gidx--; j++;
         }
-        
         // Bloomfilter checking process (modified with Symbol table)
         //if(bf_check(global_bf[chip][blk].bfchip_arr, idx, hashkey) == true) {
         if(symbol_check(global_bf[chip][blk].bfchip_arr, idx, hashkey, \
-                    internal_bf_idx, (int)global_bf[chip][blk].bfchip_arr[idx]->start) == true) {
+                    symbol[chip][blk], st_man->sym_bits_pg[idx], front_byte, front_bit, \
+                    (int)global_bf[chip][blk].bfchip_arr[idx]->start, symb_arr, symb_arr_sz) == true) {
+        //if(symbol_check(global_bf[chip][blk].bfchip_arr, idx, hashkey, \
+                    internal_bf_idx, \
+                    global_bf[chip][blk].bfchip_arr[idx]->start) == true) {
             if(storage.chip_arr[way][chnl].data_blk[blk].oob[idx] == lba) {
                 found_cnt++;
                 reading[read_cnt].lbanum = lba;
                 reading[read_cnt].level = offset - idx;
                 reading[read_cnt].found++;
+free(symb_arr);
                 return;
             } else {
                 notfound_cnt++;
                 reading[read_cnt].notfound++;
+free(symb_arr);
                 continue;
             }
         } else {
+free(symb_arr);
             false_cnt++;
         }
 /**/
@@ -562,7 +585,26 @@ void bloom_read(uint32_t lba) {
         }
 **/
     }
+    
+    if(storage.chip_arr[way][chnl].data_blk[blk].oob[1] != lba) {
+        if(storage.chip_arr[way][chnl].data_blk[blk].oob[0] != lba) {
+            printf("This should not happen !!\n");
+            exit(1);
+        }
+        else {
+            found_cnt++;
+            reading[read_cnt].lbanum = lba;
+            reading[read_cnt].level = offset - 0;
+            reading[read_cnt].found++;
+        }
+    } else {
+        found_cnt++;
+        reading[read_cnt].lbanum = lba;
+        reading[read_cnt].level = offset - 0;
+        reading[read_cnt].found++;
+    }
 
+/*
     // Case of page offset 0
     if(storage.chip_arr[way][chnl].data_blk[blk].oob[0] != lba) {
         printf("This should not happen !!\n");
@@ -573,6 +615,7 @@ void bloom_read(uint32_t lba) {
         reading[read_cnt].level = offset - 0;
         reading[read_cnt].found++;
     }
+*/
 }
 
 void symbol_init() {
@@ -594,13 +637,15 @@ void symbol_init() {
 
     st_man->sym_bits_pg[0] = 0;
     start[0] = 0;
+    //for(int p=2; p<PAGE_PER_BLOCK; p++) {
     for(int p=1; p<PAGE_PER_BLOCK; p++) {
         symbol_bit = bf_man->bits_per_pg[0][0][p];
         symbol_bit = ceil(log(symbol_bit) / log(2));
-        
         st_man->sym_bits_pg[p] = symbol_bit;
+        
         start[p] = sum;
         sum += symbol_bit;
+//printf("sym_bits: %lu\n", st_man->sym_bits_pg[p]);
     }
     st_man->sym_bits_blk = sum;
     st_man->sym_bits_chip = sum * BLOCK_PER_CHIP;
