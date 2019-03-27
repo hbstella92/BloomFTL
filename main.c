@@ -508,11 +508,7 @@ void bloom_read(uint32_t lba) {
 /*
  * Decompression with SymbolTable
  */
-        // Decoding Symbol to BF's index
-        internal_bf_idx=0;
-        
-        int symb_front_gidx = start[idx];
-        int symb_end_gidx = symb_front_gidx + st_man->sym_bits_pg[idx] - 1;
+
 
         int front_byte = start[idx] / 8;
         int front_bit = start[idx] % 8;
@@ -520,6 +516,13 @@ void bloom_read(uint32_t lba) {
         int symb_arr_sz = end_byte - front_byte + 1;
         uint32_t* symb_arr = (uint32_t*)malloc(sizeof(uint32_t) * (end_byte - front_byte + 1));
         memset(symb_arr, 0, sizeof(uint32_t) * symb_arr_sz);
+
+/*
+        // Decoding Symbol to BF's index
+        internal_bf_idx=0;
+        
+        int symb_front_gidx = start[idx];
+        int symb_end_gidx = symb_front_gidx + st_man->sym_bits_pg[idx] - 1;
 
         int byte, bit;
         int j=0;
@@ -534,6 +537,7 @@ void bloom_read(uint32_t lba) {
 
             symb_end_gidx--; j++;
         }
+*/
         // Bloomfilter checking process (modified with Symbol table)
         //if(bf_check(global_bf[chip][blk].bfchip_arr, idx, hashkey) == true) {
         if(symbol_check(global_bf[chip][blk].bfchip_arr, idx, hashkey, \
