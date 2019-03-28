@@ -16,7 +16,6 @@ extern int save_fd;
 void BITSET(char *input, char offset){
 	char test=1;
 	test<<=offset;
-if(input == NULL) {exit(0);}
 	(*input)|=test;
 }
 bool BITGET(char input, char offset){
@@ -147,15 +146,17 @@ BF** bf_init(int entry, int pg_per_blk) {
         //true_p = pow(PR_SUCCESS, (double)1/((p / 2) + 1));
         true_p = pow(PR_SUCCESS, (double)1/p);
         false_p = 1 - true_p;
+printf("pg_idx: %d\tfalse_p: %lf\t", p, false_p);
         res[p]->p = false_p;
         res[p]->m = ceil(-1 / (log(1-pow(res[p]->p,1/1)) / log(exp(1.0))));
+printf("bf_bits: %lu\n", res[p]->m);
         res[p]->targetsize = res[p]->m / 8;
         if(res[p]->m % 8) {
             res[p]->targetsize++;
         }
         sum_bits += res[p]->m;
         res[p]->start = sum_bits - res[p]->m;
-    }
+    } //exit(0);
 
     uint64_t sum_bytes = sum_bits / 8;
     if(sum_bits % 8) {
@@ -166,7 +167,7 @@ BF** bf_init(int entry, int pg_per_blk) {
     return res;
 }
 
-/* Compressible bf_init (previous)
+/* Compressible bf_init (variable hash func)
 BF* bf_init(int entry, float fpr) {
     if(fpr > 1) { return NULL; }
     BF* res = (BF*)malloc(sizeof(BF));
@@ -353,9 +354,9 @@ bool symbol_check(BF** input, int idx, KEYT key, char* symbol, int symb_length, 
         next_chunk_sz = 0;
     }
 
-    for(int i=0; i<symb_arr_sz; i++) {
-        memcpy(&symb_arr[i], &symbol[front_byte+i], 1);
+    memcpy(symb_arr, &symbol[front_byte], symb_arr_sz);
 
+    for(int i=0; i<symb_arr_sz; i++) {
         if(first_chunk_flag) {
             if(remain_chunk < 8) {
                 if(next_chunk_sz == 0) {

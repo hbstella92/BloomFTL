@@ -567,7 +567,7 @@ free(symb_arr);
 
 /*
  * Original BF
- *
+ */
         // Bloomfilter says true
         if(bf_check(global_bf[chip][blk].bfchip_arr, idx, hashkey) == true) {
             if(storage.chip_arr[way][chnl].data_blk[blk].oob[idx] == lba) { // Data exists
@@ -587,9 +587,12 @@ free(symb_arr);
         else { // Data should not exist
             false_cnt++;
         }
-**/
+/**/
     }
-    
+
+/*
+ * Probability modeling: binded two-by-two
+ *
     if(storage.chip_arr[way][chnl].data_blk[blk].oob[1] != lba) {
         if(storage.chip_arr[way][chnl].data_blk[blk].oob[0] != lba) {
             printf("This should not happen !!\n");
@@ -607,6 +610,7 @@ free(symb_arr);
         reading[read_cnt].level = offset - 0;
         reading[read_cnt].found++;
     }
+*/
 
 /*
     // Case of page offset 0
