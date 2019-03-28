@@ -10,6 +10,7 @@
 #endif
 
 #define PR_SUCCESS 0.9
+#define NUM_CHUNK 10
 
 extern int save_fd;
 
@@ -331,7 +332,7 @@ int bf_set(BF** input, int idx, KEYT key) {
     return global_bf_idx; // return value: global idx of BF
 }
 
-bool symbol_check(BF** input, int idx, KEYT key, char* symbol, int symb_length, int front_byte, int front_bit, int start, uint32_t* symb_arr, int symb_arr_sz) {
+bool symbol_check(BF** input, int idx, KEYT key, char* symbol, int symb_length, int front_byte, int front_bit, int start, uint8_t* symb_arr, int symb_arr_sz) {
     if(input[idx] == NULL) return false;
 
     KEYT h;
@@ -343,6 +344,7 @@ bool symbol_check(BF** input, int idx, KEYT key, char* symbol, int symb_length, 
     int remain_chunk = symb_length;
     int chunk_cnt=0;
     uint32_t comp_symb;
+    uint32_t test[NUM_CHUNK] = {0,};
     int next_chunk_sz = remain_chunk - chunk_sz;
 
     if(next_chunk_sz <= 0) {
@@ -350,8 +352,12 @@ bool symbol_check(BF** input, int idx, KEYT key, char* symbol, int symb_length, 
         next_chunk_sz = 0;
     }
 
+    //memset(symb_arr, 0, sizeof(uint32_t) * NUM_CHUNK);
+    memcpy(symb_arr, &symbol[front_byte], symb_arr_sz);
+    //printf("size: %d\n", symb_arr_sz);    
     for(int i=0; i<symb_arr_sz; i++) {
-        memcpy(&symb_arr[i], &symbol[front_byte+i], 1);
+        //memcpy(&symb_arr[i], &symbol[front_byte+i], 1);
+        test[i] = symb_arr[i];
 
         if(first_chunk_flag) {
             if(remain_chunk < 8) {
@@ -359,31 +365,39 @@ bool symbol_check(BF** input, int idx, KEYT key, char* symbol, int symb_length, 
                     if(!((front_bit + chunk_sz) % 8)) {
                         mask = ((1 << chunk_sz) - 1);
                         
-                        symb_arr[i] &= mask;
+                        //symb_arr[i] &= mask;
+                        test[i] &= mask;
                     } else {
                         shift = 8 - front_bit - chunk_sz;
                         mask = ((1 << chunk_sz) - 1);
 
-                        symb_arr[i] >>= shift;
-                        symb_arr[i] &= mask;
+                        //symb_arr[i] >>= shift;
+                        //symb_arr[i] &= mask;
+                        test[i] >>= shift;
+                        test[i] &= mask;
                     }
                 } else {
                     mask = ((1 << chunk_sz) - 1);
                     shift = next_chunk_sz;
 
-                    symb_arr[i] &= mask;
-                    symb_arr[i] <<= shift;
+                    //symb_arr[i] &= mask;
+                    //symb_arr[i] <<= shift;
+                    test[i] &= mask;
+                    test[i] <<= shift;
                 }
             } else if(chunk_sz < 8) {
                 mask = ((1 << chunk_sz) - 1);
                 shift = symb_length - chunk_sz;
-
-                symb_arr[i] &= mask;
-                symb_arr[i] <<= shift;
+                
+                //symb_arr[i] &= mask;
+                //symb_arr[i] <<= shift;
+                test[i] &= mask;
+                test[i] <<= shift;
             } else {
                 shift = symb_length - chunk_sz;
 
-                symb_arr[i] <<= shift;
+                //symb_arr[i] <<= shift;
+                test[i] <<= shift;
             }
             
             first_chunk_flag = 0;
@@ -392,11 +406,13 @@ bool symbol_check(BF** input, int idx, KEYT key, char* symbol, int symb_length, 
                 if(chunk_sz < 8) {
                     shift = 8 - chunk_sz;
 
-                    symb_arr[i] >>= shift;
+                    //symb_arr[i] >>= shift;
+                    test[i] >>= shift;
                 }
             } else {
                 shift = next_chunk_sz;
-                symb_arr[i] <<= shift;
+                //symb_arr[i] <<= shift;
+                test[i] <<= shift;
             }
         }
         remain_chunk -= chunk_sz;
@@ -415,10 +431,11 @@ bool symbol_check(BF** input, int idx, KEYT key, char* symbol, int symb_length, 
         chunk_cnt++;
     }
     
-    uint32_t test;
-    memset(&test, 0, sizeof(uint32_t));
+    uint32_t result = 0;
+    //memset(&test, 0, sizeof(uint32_t));
     for(int i=0; i<chunk_cnt; i++) {
-        test |= symb_arr[i];
+        //test |= symb_arr[i];
+        result |= test[i];
     }
 
     for(uint32_t i=0; i<input[idx]->k; i++) {
@@ -430,7 +447,7 @@ bool symbol_check(BF** input, int idx, KEYT key, char* symbol, int symb_length, 
         
         comp_symb = 8 * block + offset;
 
-        if(start+test != comp_symb) {
+        if(start+result != comp_symb) {
             return false;
         }
     }

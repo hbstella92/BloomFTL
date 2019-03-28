@@ -32,8 +32,7 @@
 #define WRKMEM_SZ 10
 
 // Symbol buffer
-#define MAX_SYMBUF 20
-#define SYMBOL_MASK(n) ((1 << (n+1)) - 1)
+#define SYMBOL_CHUNK 10
 
 int data_sz;
 uint32_t val;
@@ -113,10 +112,7 @@ typedef struct {
 char*** symbol;
 uint64_t* start;
 SManager* st_man;
-
-int* gidx_arr;
-int* iidx_arr;
-int bitcnt=0;
+uint8_t symb_arr[SYMBOL_CHUNK];
 
 void bloom_init() {
     double true_p=0.0, false_p=0.0;
@@ -478,8 +474,8 @@ void bloom_read(uint32_t lba) {
         int front_bit = start[idx] % 8;
         int end_byte = (start[idx] + st_man->sym_bits_pg[idx] - 1) / 8;
         int symb_arr_sz = end_byte - front_byte + 1;
-        uint32_t* symb_arr = (uint32_t*)malloc(sizeof(uint32_t) * (end_byte - front_byte + 1));
-        memset(symb_arr, 0, sizeof(uint32_t) * symb_arr_sz);
+        //uint32_t* symb_arr = (uint32_t*)malloc(sizeof(uint32_t) * (end_byte - front_byte + 1));
+        //memset(symb_arr, 0, sizeof(uint32_t) * symb_arr_sz);
 
 /*
  * Decoding symbol with binary operation
@@ -513,20 +509,14 @@ void bloom_read(uint32_t lba) {
                 reading[read_cnt].lbanum = lba;
                 reading[read_cnt].level = offset - idx;
                 reading[read_cnt].found++;
-                
-                free(symb_arr);
                 return;
             } else {
                 notfound_cnt++;
                 reading[read_cnt].notfound++;
-                
-                free(symb_arr);
                 continue;
             }
         } else {
             false_cnt++;
-            
-            free(symb_arr);
         }
 /**/
 
