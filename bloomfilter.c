@@ -134,7 +134,6 @@ BF** bf_init(int entry, int pg_per_blk) {
         res[p] = (BF*)malloc(sizeof(BF));
        
         if(p == 0) {
-        //if((p / 2) == 0) {
             res[p]->start = 0;
             res[p]->m = 0;
             continue;
@@ -143,20 +142,18 @@ BF** bf_init(int entry, int pg_per_blk) {
         res[p]->n = entry;
         res[p]->k = 1;
 
-        //true_p = pow(PR_SUCCESS, (double)1/((p / 2) + 1));
         true_p = pow(PR_SUCCESS, (double)1/p);
         false_p = 1 - true_p;
-printf("pg_idx: %d\tfalse_p: %lf\t", p, false_p);
+        
         res[p]->p = false_p;
         res[p]->m = ceil(-1 / (log(1-pow(res[p]->p,1/1)) / log(exp(1.0))));
-printf("bf_bits: %lu\n", res[p]->m);
         res[p]->targetsize = res[p]->m / 8;
         if(res[p]->m % 8) {
             res[p]->targetsize++;
         }
         sum_bits += res[p]->m;
         res[p]->start = sum_bits - res[p]->m;
-    } //exit(0);
+    }
 
     uint64_t sum_bytes = sum_bits / 8;
     if(sum_bits % 8) {
@@ -339,7 +336,6 @@ bool symbol_check(BF** input, int idx, KEYT key, char* symbol, int symb_length, 
 
     KEYT h;
     int block, offset;
-//    int global_bf_idx = start + internal_idx;
     int mask, shift;
     int chunk_sz = ((((front_bit / 8) + 1) * 8) - front_bit);
     int first_chunk_flag=1;
@@ -354,9 +350,9 @@ bool symbol_check(BF** input, int idx, KEYT key, char* symbol, int symb_length, 
         next_chunk_sz = 0;
     }
 
-    memcpy(symb_arr, &symbol[front_byte], symb_arr_sz);
-
     for(int i=0; i<symb_arr_sz; i++) {
+        memcpy(&symb_arr[i], &symbol[front_byte+i], 1);
+
         if(first_chunk_flag) {
             if(remain_chunk < 8) {
                 if(next_chunk_sz == 0) {
@@ -435,7 +431,6 @@ bool symbol_check(BF** input, int idx, KEYT key, char* symbol, int symb_length, 
         comp_symb = 8 * block + offset;
 
         if(start+test != comp_symb) {
-        //if(global_bf_idx != 8*block+offset) {
             return false;
         }
     }
