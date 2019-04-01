@@ -3,13 +3,14 @@
 #include <string.h>
 #include <time.h>
 #include <math.h>
-#include <sys/time.h>
 
 #include "settings.h"
 #include "lsm_settings.h"
 #include "bloomfilter.h"
 #include "sha256.h"
-//#include "sha256-arm.h"
+#include "zlib.h"
+#include "zlib_2.h"
+#include "zconf.h"
 
 #define CHANNEL 8
 #define WAY 8
@@ -24,38 +25,18 @@
 #define DATA_SET (TOTAL_PAGE)
 #define PFTL ((PAGE_PER_BLOCK)*(32))
 
+#define LSB (int)(log(TOTAL_BLOCK) / log(2))
+#define MASK ((1 << LSB) - 1)
+
+// Compression buffer
+#define WRKMEM_SZ 10
+
 // Symbol buffer
-#define SYMBOL_CHUNK 10
-
-// Options for lba generation
-#define W_UNIQUE 0x1
-#define R_UNIQUE 0x2
-#define R_RD_ORDER 0x4
-#define R_RD_GEN 0x8
-
-// Memory prefetch
-#ifdef _PREF
-#define CL 64
-#define TL 2
-#define ML 211
-#endif
-
-char *read_t = "SEQ";
-char *write_t = "SEQ";
-
-extern double d_t;
-extern double h_t;
-
-double read_check=0.0;
-double wr_symbol=0.0;
-int read_loop=0;
-double w_time=0.0;
-double r_time=0.0;
+#define MAX_SYMBUF 20
+#define SYMBOL_MASK(n) ((1 << (n+1)) - 1)
 
 int data_sz;
 uint32_t val;
-
-uint32_t mask;
 
 typedef struct {
     uint32_t lbanum;
@@ -66,9 +47,9 @@ typedef struct {
     double fp;
 } Dat;
 
-// Struct 'Dat' follows generated sequences of their own
+// Struct-Dat follows generated sequences of their own
 Dat written[DATA_SET];
-Dat reading[DATA_SET]; // For statistics
+Dat reading[DATA_SET]; // for statistics
 
 int read_cnt;
 int write_cnt;
@@ -85,6 +66,14 @@ typedef struct {
 } Block;
 
 typedef struct {
+    Block* data_blk;
+} Chip;
+
+typedef struct {
+    Chip** chip_arr;
+} Storage;
+
+typedef struct {
     BF** bfchip_arr;
 } GlobalBF;
 
@@ -95,10 +84,23 @@ typedef struct {
     uint64_t*** bytes_arr;
 } BFManager;
 
-GlobalBF* global_bf;
+GlobalBF** global_bf;
 BFManager* bf_man;
 
-Block* storage;
+Storage storage;
+Block** data_block;
+
+double* fp_arr;
+
+// Compression-related
+typedef struct {
+    char* comp_arr;
+    size_t len;
+} Compbuf;
+
+Compbuf*** compbuf;
+Compbuf*** decompbuf;
+Compbuf*** checkbuf;
 
 typedef struct {
     uint64_t sym_bits_chip; // 1 chip
@@ -107,16 +109,17 @@ typedef struct {
     uint64_t sym_bits_total;
 } SManager;
 
-// Symbol-related
+// Symbol (hash func == 1)
 char*** symbol;
 uint64_t* start;
 SManager* st_man;
-uint8_t symb_arr[SYMBOL_CHUNK];
+
+int* gidx_arr;
+int* iidx_arr;
+int bitcnt=0;
 
 void bloom_init() {
     double true_p=0.0, false_p=0.0;
-
-    mask = (1 << (int)(log(TOTAL_BLOCK) / log(2))) - 1;
    
     // Alloc && Initialize BFManager
     bf_man = (BFManager*)malloc(sizeof(BFManager));
@@ -144,21 +147,21 @@ void bloom_init() {
         }
     }
 
-    // Alloc && Initialize global_bf
-    global_bf = (GlobalBF*)malloc(sizeof(GlobalBF) * TOTAL_BLOCK);
-    for(int b=0; b<TOTAL_BLOCK; b++) {
-        global_bf[b].bfchip_arr = bf_init(1, PAGE_PER_BLOCK);
-    }
-
+    // Alloc && Initialize GlobalBF
+    global_bf = (GlobalBF**)malloc(sizeof(GlobalBF*) * CHIP);
     for(int c=0; c<CHIP; c++) {
+        global_bf[c] = (GlobalBF*)malloc(sizeof(GlobalBF) * BLOCK_PER_CHIP);
+
         for(int b=0; b<BLOCK_PER_CHIP; b++) {
+            global_bf[c][b].bfchip_arr = bf_init(1, PAGE_PER_BLOCK);
+
             for(int p=0; p<PAGE_PER_BLOCK; p++) {
                 if(p == 0) {
                     bf_man->bits_per_pg[c][b][p] = 0;
                     bf_man->bytes_arr[c][b][p] = 0;
                 }
                 else {
-                    bf_man->bits_per_pg[c][b][p] = bf_bits(global_bf[c*BLOCK_PER_CHIP+b].bfchip_arr[p]);
+                    bf_man->bits_per_pg[c][b][p] = bf_bits(global_bf[c][b].bfchip_arr[p]);
 
                     int bytes = bf_man->bits_per_pg[c][b][p] / 8;
                     if(bf_man->bits_per_pg[c][b][p] % 8) {
@@ -173,18 +176,68 @@ void bloom_init() {
         }
     }
 
-    // Alloc memory for all blocks and pages
-    storage = (Block*)malloc(sizeof(Block) * TOTAL_BLOCK);
-    for(int b=0; b<TOTAL_BLOCK; b++) {
-        storage[b].page = (uint32_t*)malloc(sizeof(uint32_t) * PAGE_PER_BLOCK);
-        storage[b].oob = (uint32_t*)malloc(sizeof(uint32_t) * PAGE_PER_BLOCK);
-
-        // Initialize all values in block
-        for(int p=0; p<PAGE_PER_BLOCK; p++) {
-            storage[b].page[p] = storage[b].oob[p] = 99999;
+    // Compression-related
+    compbuf = (Compbuf***)malloc(sizeof(Compbuf**) * CHIP);
+    decompbuf = (Compbuf***)malloc(sizeof(Compbuf**) * CHIP);
+    for(int c=0; c<CHIP; c++) {
+        compbuf[c] = (Compbuf**)malloc(sizeof(Compbuf*) * BLOCK_PER_CHIP);
+        decompbuf[c] = (Compbuf**)malloc(sizeof(Compbuf*) * BLOCK_PER_CHIP);    
+        for(int b=0; b<BLOCK_PER_CHIP; b++) {
+            compbuf[c][b] = (Compbuf*)malloc(sizeof(Compbuf) * PAGE_PER_BLOCK);
+            decompbuf[c][b] = (Compbuf*)malloc(sizeof(Compbuf) * PAGE_PER_BLOCK);
         }
-        storage[b].empty = 0;
-        storage[b].valid = 0;
+    }
+
+    // Assign different bytes per page-level in all bloomfilters separately
+    for(int c=0; c<CHIP; c++) {
+        for(int b=0; b<BLOCK_PER_CHIP; b++) {
+            for(int p=0; p<PAGE_PER_BLOCK; p++) {
+                if(p == 0) {
+                    compbuf[c][b][p].comp_arr = decompbuf[c][b][p].comp_arr = NULL;
+                }
+                else {
+                    compbuf[c][b][p].comp_arr = (char*)malloc(sizeof(char) * WRKMEM_SZ);
+                    decompbuf[c][b][p].comp_arr = (char*)malloc(sizeof(char) * WRKMEM_SZ);
+                }
+                compbuf[c][b][p].len = decompbuf[c][b][p].len = 0;
+            }
+        }
+    }
+
+    // Alloc memory for all chips, blocks, and pages
+    storage.chip_arr = (Chip**)malloc(sizeof(Chip*) * WAY);
+    for(int w=0; w<WAY; w++) {
+        storage.chip_arr[w] = (Chip*)malloc(sizeof(Chip) * CHANNEL);
+    }
+
+    for(int w=0; w<WAY; w++) {
+        for(int ch=0; ch<CHANNEL; ch++) {
+            storage.chip_arr[w][ch].data_blk = (Block*)malloc(sizeof(Block) * BLOCK_PER_CHIP);
+        }
+    }
+
+    for(int w=0; w<WAY; w++) {
+        for(int ch=0; ch<CHANNEL; ch++) {
+            for(int b=0; b<BLOCK_PER_CHIP; b++) {
+                storage.chip_arr[w][ch].data_blk[b].page = (uint32_t*)malloc(sizeof(uint32_t) * PAGE_PER_BLOCK);
+                storage.chip_arr[w][ch].data_blk[b].oob = (uint32_t*)malloc(sizeof(uint32_t) * PAGE_PER_BLOCK);
+            }
+        }
+    }
+
+    // Initialize values for data blocks
+    for(int w=0; w<WAY; w++) {
+        for(int ch=0; ch<CHANNEL; ch++) {
+            for(int b=0; b<BLOCK_PER_CHIP; b++) {
+                for(int p=0; p<PAGE_PER_BLOCK; p++) {
+                    storage.chip_arr[w][ch].data_blk[b].page[p] = \
+                        storage.chip_arr[w][ch].data_blk[b].oob[p] = 99999;
+                }
+
+                storage.chip_arr[w][ch].data_blk[b].empty = 0;
+                storage.chip_arr[w][ch].data_blk[b].valid = 0;
+            }
+        }
     }
 
     // Initialize values for statistics
@@ -199,14 +252,25 @@ void bloom_destroy() {
             free(bf_man->bytes_arr[c][b]);
             free(bf_man->bits_per_pg[c][b]);
             
-            bf_free(global_bf[c*BLOCK_PER_CHIP+b].bfchip_arr, PAGE_PER_BLOCK);
-        }
+            for(int p=0; p<PAGE_PER_BLOCK; p++) {
+                free(compbuf[c][b][p].comp_arr);
+                free(decompbuf[c][b][p].comp_arr);
+            }
 
+            bf_free(global_bf[c][b].bfchip_arr, PAGE_PER_BLOCK);
+
+            free(compbuf[c][b]);
+            free(decompbuf[c][b]);
+        }
         free(bf_man->bytes_arr[c]);
         free(bf_man->bits_per_pg[c]);
         free(bf_man->bits_per_blk[c]);
-    }
+            
+        free(global_bf[c]);
 
+        free(compbuf[c]);
+        free(decompbuf[c]);
+    }
     free(bf_man->bytes_arr);
     free(bf_man->bits_per_pg);
     free(bf_man->bits_per_blk);
@@ -214,15 +278,24 @@ void bloom_destroy() {
     free(bf_man);
     free(global_bf);
 
-    for(int b=0; b<TOTAL_BLOCK; b++) {
-        free(storage[b].page);
-        free(storage[b].oob);
-    }
+    free(compbuf);
+    free(decompbuf);
 
-    free(storage);
+    for(int w=0; w<WAY; w++) {
+        for(int ch=0; ch<CHANNEL; ch++) {
+            for(int b=0; b<BLOCK_PER_CHIP; b++) {
+                free(storage.chip_arr[w][ch].data_blk[b].page);
+                free(storage.chip_arr[w][ch].data_blk[b].oob);
+            }
+
+            free(storage.chip_arr[w][ch].data_blk);
+        }
+
+        free(storage.chip_arr[w]);
+    }
+    free(storage.chip_arr);
 }
 
-/* SHA256 by hanbyeol
 uint32_t hashing_key(uint32_t key) {
     char* string;
     Sha256Context ctx;
@@ -248,129 +321,7 @@ uint32_t hashing_key(uint32_t key) {
 
     return hashkey;
 }
-*/
 
-/* SHA256 by jiho
-uint32_t hashing_key(uint32_t key) {
-	uint32_t hashkey; 
-	uint32_t state[8];
-	
-	sha256_calculate(state, key);
-
-	hashkey = state[0];
-	for(int i=1; i<8; i++) {
-		hashkey ^= state[i];
-	}
-
-	return hashkey;
-}
-*/
-
-// Fibonacci hash
-static inline uint32_t hashing_key(uint32_t key) {
-    return (uint32_t)((0.618033887 * key) * 1024);
-}
-
-int compare(const void *a, const void *b) {
-	uint32_t num1 = *(uint32_t *)a;
-	uint32_t num2 = *(uint32_t *)b;
-
-	if (num1 < num2)
-		return -1;
-	if (num1 > num2)
-		return 1;
-	return 0;
-}
-
-void shuffle(uint32_t *arr, int length) {
-	int i, j, t;
-	for(i=0; i<length-1; i++) {
-		j = i + rand() / (RAND_MAX / (length - i) + 1);
-		t = arr[j];
-		arr[j] = arr[i];
-		arr[i] = t;
-	}
-}
-
-// W_UNIQUE works in RAND
-// R_UNIQUE works in RAND (If W_UNIQUE is not set, R_UNIQUE doesn't work)
-// R_RD_ORDER works in RAND READ	
-// R_RD_GEN works in RAND READ.
-void make_test_set(uint32_t *w_arr, uint32_t *r_arr, char *w_t, char *r_t, uint8_t options, uint32_t test_size) {
-	uint8_t *page_usage;
-	uint32_t make_cnt, lba, pbn;
-	uint8_t read = 1, write = 1;
-
-	if(!strcmp(w_t, "RAND")) {
-		write = 0;
-	}
-	if(!strcmp(r_t, "RAND")) {
-		read = 0;
-	}
-
-	// Generate write lba
-	if(!write && !(options & W_UNIQUE)) {
-		// Check whether the physical block corresponding to lba is full or not (Because there is no GC algorithm)
-		make_cnt = 0;
-		page_usage = (uint8_t*)malloc(TOTAL_PAGE);
-		memset(page_usage, 0, TOTAL_PAGE);
-
-		while(make_cnt < test_size) {
-			lba = rand() % TOTAL_PAGE;
-			pbn = lba & mask;
-
-			if(page_usage[pbn] == PAGE_PER_BLOCK) {
-				continue;
-			}
-
-			w_arr[make_cnt++] = lba;
-			page_usage[pbn]++;
-		}
-
-		free(page_usage);
-	/*
-		// After GC is implemented
-		for(int i = 0; i < test_size; i++) {
-			w_arr[i] = rand() % TOTAL_PAGE;
-		}
-	*/
-	}
-	else {
-		for(int i = 0; i < test_size; i++) {
-			w_arr[i] = i;
-		}
-
-		if(!write) {
-			shuffle(w_arr, test_size);
-		}
-	}
-
-	// Generate read lba
-	if(read) { // Seq read
-		memcpy(r_arr, w_arr, sizeof(uint32_t) * test_size);
-		if(!write) {
-			qsort(r_arr, test_size, sizeof(uint32_t), compare);
-		}
-	}
-	else { // Rand read
-		if((write && !(options & R_UNIQUE)) || (!write && ((options & (W_UNIQUE | R_UNIQUE)) == W_UNIQUE ||\
-						(options & (W_UNIQUE | R_RD_GEN)) == R_RD_GEN))) {
-
-			for(int i = 0; i < test_size; i++) {
-				r_arr[i] = w_arr[rand() % test_size];
-			}
-		}
-		else {
-			memcpy(r_arr, w_arr, sizeof(uint32_t) * test_size);
-
-			if(write || (options & R_RD_ORDER)) {
-				shuffle(r_arr, test_size);
-			}
-		}
-	}
-}
-
-/*
 uint32_t generate_lba(char req, char* pttr) {
     if(req == 'W') {        
         if(!strcmp(pttr, "SEQ")) {
@@ -379,8 +330,9 @@ uint32_t generate_lba(char req, char* pttr) {
         else {
             // Random and duplicated
             return rand() % DATA_SET;
-
-            // Random and uniform
+/*
+ * Random and Uniform
+ *
             uint32_t nodup_rand_val = rand() % DATA_SET;
             int idx;
             while(1) {
@@ -395,6 +347,7 @@ uint32_t generate_lba(char req, char* pttr) {
                     return nodup_rand_val;
                 }
             }
+*/
         }
     }
     else if(req == 'R') {
@@ -414,9 +367,26 @@ uint32_t generate_lba(char req, char* pttr) {
         }
     }
 }
-*/
 
-// For debugging
+uint64_t cal_combination(uint64_t bits, uint32_t func) {
+    uint64_t n = bits; uint64_t r = func;
+
+    if(r > n-r) {
+        r = n-r;
+    }
+
+    uint64_t up = 1; uint64_t down = 1;
+    uint64_t t = r; uint64_t i = 0;
+    
+    while(t--) {
+        up *= (n-i);
+        down *= (r-i);
+        i++;
+    }
+    
+    return (up / down);
+}
+
 void print_byte_as_bit(unsigned char* val, size_t bytes) {
     for(int i=0; i<bytes; i++) {
         for(int j=7; j>=0; j--) {
@@ -426,28 +396,38 @@ void print_byte_as_bit(unsigned char* val, size_t bytes) {
 }
 
 void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
-    uint32_t pbn, hashkey;
-    int chip, blk, offset;
+    uint32_t pbn, key, hashkey;
+    int chip, way, chnl, blk, offset;
     int global_bf_idx;
     int internal_bf_idx;
+//printf("WR LBA %u\n", lba);
+    while(1) {
+        pbn = (lba & MASK);
+        chip = pbn / BLOCK_PER_CHIP;
+        way = chip / CHANNEL;
+        chnl = chip % CHANNEL;
+        blk = pbn % BLOCK_PER_CHIP;
+        offset = storage.chip_arr[way][chnl].data_blk[blk].empty;
 
-    pbn = (lba & mask);
-    chip = pbn / BLOCK_PER_CHIP;
-    blk = pbn % BLOCK_PER_CHIP;
-    offset = storage[pbn].empty;
-   
-    if(offset >= PAGE_PER_BLOCK) {
-        printf("Generated write lba is out of range\n");
-        exit(1);
+        if(offset >= PAGE_PER_BLOCK) {
+            lba = generate_lba('W', pttr);
+        }
+        else {
+            break;
+        }
     }
     
-    // Do not have to make bfchip_arr of page 0
+    // Do not have to make bfchip_arr of page 0 (OPTIMIZATION)
     if(offset != 0) {
-        hashkey = hashing_key(lba);
-        global_bf_idx = bf_set(global_bf[pbn].bfchip_arr, offset, hashkey + offset);
-        internal_bf_idx = global_bf_idx - global_bf[pbn].bfchip_arr[offset]->start;
+        key = lba + offset;
+        hashkey = hashing_key(key);
+        global_bf_idx = bf_set(global_bf[chip][blk].bfchip_arr, offset, hashkey);
+        internal_bf_idx = global_bf_idx - global_bf[chip][blk].bfchip_arr[offset]->start;
 
-        // Encode BF to symbol
+/*
+ * Compression with SymbolTable
+ */
+        // Encoding BF to Symbol with h
         int symb_end_gidx = start[offset] + st_man->sym_bits_pg[offset] - 1;
         
         int byte, bit;
@@ -461,11 +441,12 @@ void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
             symb_end_gidx--;
             internal_bf_idx /= 2;
         }
+/**/
     }
 
-    storage[pbn].page[offset] = value;
-    storage[pbn].oob[offset] = lba;
-    storage[pbn].empty++;
+    storage.chip_arr[way][chnl].data_blk[blk].page[offset] = value;
+    storage.chip_arr[way][chnl].data_blk[blk].oob[offset] = lba;
+    storage.chip_arr[way][chnl].data_blk[blk].empty++;
     
     // Record working set
     written[write_cnt].lbanum = lba;
@@ -477,68 +458,108 @@ void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
 }
 
 void bloom_read(uint32_t lba) {
-    uint32_t pbn, hashkey;
-    int chip, blk, offset;
-#ifdef _PREF
-    char *next_p, *end_p;
-#endif
-    struct timeval strt, end;    
-    
-    pbn = (lba & mask);
+    uint32_t pbn, key, hashkey;
+    int chip, way, chnl, blk, offset;
+//printf("RD LBA %u", lba);
+    pbn = (lba & MASK);
     chip = pbn / BLOCK_PER_CHIP;
+    way = chip / CHANNEL;
+    chnl = chip % CHANNEL;
     blk = pbn % BLOCK_PER_CHIP;
-    offset = storage[pbn].empty;
+    offset = storage.chip_arr[way][chnl].data_blk[blk].empty;
     int internal_bf_idx = 0;
-#ifdef _PREF
-    next_p = global_bf[pbn].bfchip_arr[0]->body + CL;
-    end_p = global_bf[pbn].bfchip_arr[0]->body + ML;
-#endif
     
-    hashkey = hashing_key(lba);
-
     for(int idx=offset-1; idx>0; idx--) {
-        // Decode symbol with bit operation
+        key = lba + idx;
+        hashkey = hashing_key(key);
+
+        // Decoding symbol with bit operation
         int front_byte = start[idx] / 8;
         int front_bit = start[idx] % 8;
         int end_byte = (start[idx] + st_man->sym_bits_pg[idx] - 1) / 8;
         int symb_arr_sz = end_byte - front_byte + 1;
+        uint32_t* symb_arr = (uint32_t*)malloc(sizeof(uint32_t) * (end_byte - front_byte + 1));
+        memset(symb_arr, 0, sizeof(uint32_t) * symb_arr_sz);
 
-        // Check BF (Modified with Symbol table)
-        if(symbol_check(global_bf[pbn].bfchip_arr, idx, hashkey + idx, \
+/*
+ * Decoding symbol with binary operation
+ *
+        internal_bf_idx=0;
+        
+        int symb_front_gidx = start[idx];
+        int symb_end_gidx = symb_front_gidx + st_man->sym_bits_pg[idx] - 1;
+
+        int byte, bit;
+        int j=0;
+
+        while(symb_end_gidx >= symb_front_gidx) {
+            byte = symb_end_gidx / 8;
+            bit = 7 - (symb_end_gidx % 8);
+            
+            if(symbol[chip][blk][byte] & (1 << bit)) {
+                internal_bf_idx += (int)pow(2, j);
+            }
+
+            symb_end_gidx--; j++;
+        }
+*/
+
+        // Bloomfilter checking process (modified with Symbol table)
+        if(symbol_check(global_bf[chip][blk].bfchip_arr, idx, hashkey, \
                     symbol[chip][blk], st_man->sym_bits_pg[idx], front_byte, front_bit, \
-                    (int)global_bf[pbn].bfchip_arr[idx]->start, symb_arr, symb_arr_sz) == true) {
-            if(storage[pbn].oob[idx] == lba) {
+                    (int)global_bf[chip][blk].bfchip_arr[idx]->start, symb_arr, symb_arr_sz) == true) {
+            if(storage.chip_arr[way][chnl].data_blk[blk].oob[idx] == lba) {
                 found_cnt++;
+                reading[read_cnt].lbanum = lba;
+                reading[read_cnt].level = offset - idx;
+                reading[read_cnt].found++;
+                
+                free(symb_arr);
+                return;
+            } else {
+                notfound_cnt++;
+                reading[read_cnt].notfound++;
+                
+                free(symb_arr);
+                continue;
+            }
+        } else {
+            false_cnt++;
+            
+            free(symb_arr);
+        }
+/**/
+
+/*
+ * Original BF
+ *
+        // Bloomfilter says true
+        if(bf_check(global_bf[chip][blk].bfchip_arr, idx, hashkey) == true) {
+            if(storage.chip_arr[way][chnl].data_blk[blk].oob[idx] == lba) { // Data exists
+              found_cnt++;
                 reading[read_cnt].lbanum = lba;
                 reading[read_cnt].level = offset - idx;
                 reading[read_cnt].found++;
                 return;
             }
-            else {
+            else { // Data doesn't exist
                 notfound_cnt++;
                 reading[read_cnt].notfound++;
                 continue;
             }
         }
-        else {
+        // Bloomfilter says false
+        else { // Data should not exist
             false_cnt++;
         }
-
-#ifdef _PREF
-        for(; next_p<end_p; next_p+=CL) {
-            __builtin_prefetch(next_p, 0, TL);
-        }
-#endif
-        
-        read_loop++;
+**/
     }
 
     // Case of page offset 0
-    if(storage[pbn].oob[0] != lba) {
+    if(storage.chip_arr[way][chnl].data_blk[blk].oob[0] != lba) {
         printf("This should not happen !!\n");
         exit(1);
-    }
-    else {
+    } else {
         found_cnt++;
         reading[read_cnt].lbanum = lba;
         reading[read_cnt].level = offset - 0;
@@ -574,7 +595,6 @@ void symbol_init() {
         start[p] = sum;
         sum += symbol_bit;
     }
-
     st_man->sym_bits_blk = sum;
     st_man->sym_bits_chip = sum * BLOCK_PER_CHIP;
     st_man->sym_bits_total = st_man->sym_bits_chip * CHIP;
@@ -587,7 +607,6 @@ void symbol_init() {
     // Allocate symbol table
     symbol = (char***)malloc(sizeof(char**) * CHIP);
     memset(symbol, 0, sizeof(char**) * CHIP);
-
     for(int c=0; c<CHIP; c++) {
         symbol[c] = (char**)malloc(sizeof(char*) * BLOCK_PER_CHIP);
         memset(symbol[c], 0, sizeof(char*) * BLOCK_PER_CHIP);
@@ -597,6 +616,59 @@ void symbol_init() {
             memset(symbol[c][b], 0, sizeof(char) * symbol_sum_byte);
         }
     }
+
+/*
+            // Calculate symbol table size
+            int bit_count=0, symbol_bit, sum_of_bits=0;
+            uint32_t func, comb;
+            BF* prev_bf = global_bf[c][b].bfchip_arr[0];
+            uint64_t prev_bits = 0;
+            int idx=0;
+
+            for(int p=1; p<PAGE_PER_BLOCK; p++) {
+                BF* cur_bf = global_bf[c][b].bfchip_arr[p];
+                uint64_t cur_bits = bf_bits(cur_bf);
+
+                if(cur_bits != prev_bits) {
+                    if(p == 1) {
+                        bit_count = 1;
+                        prev_bits = cur_bits;
+                        prev_bf = cur_bf;
+                        idx = 1;
+                        continue;
+                    }
+
+                    func = bf_func(prev_bf);
+                    comb = cal_combination(prev_bits, func);
+                    symbol_bit = ceil(log(comb) / log(2));
+                    sum_of_bits += (bit_count * symbol_bit);
+
+                    for(int s=idx, bc=0; s<p; s++, bc++) {
+                        sym_table[c][b].start[s] = sum_of_bits - ((bit_count - bc) * symbol_bit);
+                    }
+
+                    bit_count = 1;
+                    prev_bits = cur_bits;
+                    prev_bf = cur_bf;
+                    idx = p;
+                } else {
+                    bit_count++;
+                }
+
+                if(p == PAGE_PER_BLOCK-1) {
+                    func = bf_func(prev_bf);
+                    comb = cal_combination(prev_bits, func);
+                    symbol_bit = ceil(log(comb) / log(2));
+                    sum_of_bits += (bit_count * symbol_bit);
+
+                    for(int s=idx, bc=0; s<=p; s++, bc++) {
+                        sym_table[c][b].start[s] = sum_of_bits - ((bit_count - bc) * symbol_bit);
+                    }
+                }
+            }
+        }
+    }
+*/
 }
 
 void symbol_destroy() {
@@ -610,13 +682,14 @@ void symbol_destroy() {
 
         free(symbol[c]);
     }
-
     free(symbol);
+
     free(start);
 }
 
 void print_stats(char* w_type, char* r_type) {
     uint64_t sum = 0;
+
 /*
     printf("\nFOUND LEVEL OF ALL READ REQUESTS\n");
     for(int i=0; i<DATA_SET; i++) {
@@ -707,36 +780,6 @@ void print_stats(char* w_type, char* r_type) {
         targetsize++;
     }
     printf("ALL of ST assigned: %lu bits, %lu bytes\n", st_man->sym_bits_total, targetsize);
-
-#ifdef _PREF
-    printf("\n### Memory prefetch for read ###\n");
-    switch(TL) {
-        case 0:
-            printf("Temporal locality - none: 0\n");
-            break;
-        case 1:
-            printf("Temporal locality - low: 1\n");
-            break;
-        case 2:
-            printf("Temporal locality - medium: 2\n");
-            break;
-        case 3:
-            printf("Temporal locality - high: 3\n");
-            break;
-    }
-#endif
-
-    // Time records
-	printf("Total write time: %.f (us)\n", w_time);
-	printf("Total read time: %.f (us)\n", r_time);
-	printf("Average write time: %f (us)\n", w_time/DATA_SET);
-	printf("Average read time: %f (us)\n", r_time/DATA_SET);
-
-	printf("Total read loop count: %d\n", read_loop);
-	printf("Total read check time: %.f (us)\n", read_check);
-	printf("Read check time per req: %f (us)\n", read_check/DATA_SET);
-	printf("Average read check time: %f (us)\n", read_check/read_loop);
-
     printf("\nTEST COMPLETE !!\n");
     fflush(stdout);
 }
@@ -745,9 +788,6 @@ int main(int argc, char** argv) {
     int try_rd = DATA_SET, try_wr = DATA_SET;
     uint32_t lba, pbn;
     double ptv_p=0.0, false_p=0.0;
-    uint32_t *read_arr, *write_arr; // LBA array
-    uint8_t op;
-    struct timeval strt, end;
 
     read_cnt = write_cnt = true_cnt = false_cnt = found_cnt = notfound_cnt = 0;
 
@@ -759,47 +799,35 @@ int main(int argc, char** argv) {
     bloom_init();
     symbol_init();
 
-    // Allocate LBA array
-    read_arr = (uint32_t*)malloc(sizeof(uint32_t) * DATA_SET);
-    write_arr = (uint32_t*)malloc(sizeof(uint32_t) * DATA_SET);
+/*
+ * TRADITIONAL BF
+ *
+    global_bf = (BF**)malloc(sizeof(BF*) * NUM_BLOCKS);
+    for(int i=0; i<NUM_BLOCKS; i++) {
+        global_bf[i] = bf_init(NUM_PAGES, 0.1);
+    }
+*/
 
     printf("TEST START !!\n");
     srand((unsigned int)time(NULL));
 
-    // Generate lba list
-    // Options: W_UNIQUE | R_UNIQUE | R_RD_ORDER | R_RD_GEN
-    op = R_RD_ORDER;
-    make_test_set(write_arr, read_arr, argv[1], argv[2], op, DATA_SET);
-    //make_test_set(write_arr, read_arr, write_t, read_t, op, DATA_SET);
-
     val = data_sz = 0;
     while(try_wr--) {
-        lba = write_arr[val];
-
-        gettimeofday(&strt, NULL);
+        lba = generate_lba('W', argv[1]);
         bloom_write(lba, val, argv[1]);
-        gettimeofday(&end, NULL);
-        w_time += (((end.tv_sec - strt.tv_sec) * 1000000) + (end.tv_usec - strt.tv_usec));
         
         val++; write_cnt++;
     }
 
     val = 0;
     while(try_rd--) {
-        lba = read_arr[val];
-
-        gettimeofday(&strt, NULL);
+        lba = generate_lba('R', argv[2]);
         bloom_read(lba);
-        gettimeofday(&end, NULL);
-        r_time += (((end.tv_sec - strt.tv_sec) * 1000000) + (end.tv_usec - strt.tv_usec));
 
         val++; read_cnt++;
     }
 
     print_stats(argv[1], argv[2]);
-
-    free(read_arr);
-    free(write_arr);
 
     symbol_destroy();
     bloom_destroy();

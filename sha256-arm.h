@@ -1,5 +1,5 @@
-#ifndef __SWSHA256_H__
-#define __SWSHA256_H__
+#ifndef __ARMSHA256_H__
+#define __ARMSHA256_H__
 
 #include <stdint.h>
 #include <string.h>

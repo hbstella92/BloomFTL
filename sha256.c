@@ -1,295 +1,194 @@
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//  WjCryptLib_Sha256
-//
-//  Implementation of SHA256 hash function.
-//  Original author: Tom St Denis, tomstdenis@gmail.com, http://libtom.org
-//  Modified by WaterJuice retaining Public Domain license.
-//
-//  This is free and unencumbered software released into the public domain - June 2013 waterjuice.org
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/* sha256.c - SHA reference implementation using C            */
+/*   Written and placed in public domain by Jeffrey Walton    */
 
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//  IMPORTS
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/* xlc -DTEST_MAIN sha256.c -o sha256.exe           */
+/* gcc -DTEST_MAIN -std=c99 sha256.c -o sha256.exe  */
 
+#include <stdio.h>
+#include <string.h>
+#include <stdint.h>
 #include "sha256.h"
-#include <memory.h>
 
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//  MACROS
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-#define ror(value, bits) (((value) >> (bits)) | ((value) << (32 - (bits))))
-
-#define MIN(x, y) ( ((x)<(y))?(x):(y) )
-
-#define STORE32H(x, y)                                                                     \
-{ (y)[0] = (uint8_t)(((x)>>24)&255); (y)[1] = (uint8_t)(((x)>>16)&255);   \
-	(y)[2] = (uint8_t)(((x)>>8)&255); (y)[3] = (uint8_t)((x)&255); }
-
-#define LOAD32H(x, y)                            \
-{ x = ((uint32_t)((y)[0] & 255)<<24) | \
-	((uint32_t)((y)[1] & 255)<<16) | \
-	((uint32_t)((y)[2] & 255)<<8)  | \
-	((uint32_t)((y)[3] & 255)); }
-
-#define STORE64H(x, y)                                                                     \
-{ (y)[0] = (uint8_t)(((x)>>56)&255); (y)[1] = (uint8_t)(((x)>>48)&255);     \
-	(y)[2] = (uint8_t)(((x)>>40)&255); (y)[3] = (uint8_t)(((x)>>32)&255);     \
-	(y)[4] = (uint8_t)(((x)>>24)&255); (y)[5] = (uint8_t)(((x)>>16)&255);     \
-	(y)[6] = (uint8_t)(((x)>>8)&255); (y)[7] = (uint8_t)((x)&255); }
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//  CONSTANTS
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-// The K array
-static const uint32_t K[64] = {
-	0x428a2f98UL, 0x71374491UL, 0xb5c0fbcfUL, 0xe9b5dba5UL, 0x3956c25bUL,
-	0x59f111f1UL, 0x923f82a4UL, 0xab1c5ed5UL, 0xd807aa98UL, 0x12835b01UL,
-	0x243185beUL, 0x550c7dc3UL, 0x72be5d74UL, 0x80deb1feUL, 0x9bdc06a7UL,
-	0xc19bf174UL, 0xe49b69c1UL, 0xefbe4786UL, 0x0fc19dc6UL, 0x240ca1ccUL,
-	0x2de92c6fUL, 0x4a7484aaUL, 0x5cb0a9dcUL, 0x76f988daUL, 0x983e5152UL,
-	0xa831c66dUL, 0xb00327c8UL, 0xbf597fc7UL, 0xc6e00bf3UL, 0xd5a79147UL,
-	0x06ca6351UL, 0x14292967UL, 0x27b70a85UL, 0x2e1b2138UL, 0x4d2c6dfcUL,
-	0x53380d13UL, 0x650a7354UL, 0x766a0abbUL, 0x81c2c92eUL, 0x92722c85UL,
-	0xa2bfe8a1UL, 0xa81a664bUL, 0xc24b8b70UL, 0xc76c51a3UL, 0xd192e819UL,
-	0xd6990624UL, 0xf40e3585UL, 0x106aa070UL, 0x19a4c116UL, 0x1e376c08UL,
-	0x2748774cUL, 0x34b0bcb5UL, 0x391c0cb3UL, 0x4ed8aa4aUL, 0x5b9cca4fUL,
-	0x682e6ff3UL, 0x748f82eeUL, 0x78a5636fUL, 0x84c87814UL, 0x8cc70208UL,
-	0x90befffaUL, 0xa4506cebUL, 0xbef9a3f7UL, 0xc67178f2UL
+uint8_t msg[64] = 
+{
+	0x0, 0x0, 0x0, 0x0, 0x80, 0x0, 0x0, 0x0,
+	0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+	0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+	0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+	0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+	0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+	0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+	0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x20
 };
 
-#define BLOCK_SIZE          64
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//  INTERNAL FUNCTIONS
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-// Various logical functions
-#define Ch( x, y, z )     (z ^ (x & (y ^ z)))
-#define Maj( x, y, z )    (((x | y) & z) | (x & y))
-#define S( x, n )         ror((x),(n))
-#define R( x, n )         (((x)&0xFFFFFFFFUL)>>(n))
-#define Sigma0( x )       (S(x, 2) ^ S(x, 13) ^ S(x, 22))
-#define Sigma1( x )       (S(x, 6) ^ S(x, 11) ^ S(x, 25))
-#define Gamma0( x )       (S(x, 7) ^ S(x, 18) ^ R(x, 3))
-#define Gamma1( x )       (S(x, 17) ^ S(x, 19) ^ R(x, 10))
-
-#define Sha256Round( a, b, c, d, e, f, g, h, i )       \
-	t0 = h + Sigma1(e) + Ch(e, f, g) + K[i] + W[i];   \
-t1 = Sigma0(a) + Maj(a, b, c);                    \
-d += t0;                                          \
-h  = t0 + t1;
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//  TransformFunction
-//
-//  Compress 512-bits
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-static
-void
-	TransformFunction
-(
- Sha256Context*      Context,
- uint8_t const*      Buffer
- )
+static const uint32_t K256[] =
 {
-	uint32_t    S[8];
-	uint32_t    W[64];
-	uint32_t    t0;
-	uint32_t    t1;
-	uint32_t    t;
-	int         i;
+    0x428A2F98, 0x71374491, 0xB5C0FBCF, 0xE9B5DBA5,
+    0x3956C25B, 0x59F111F1, 0x923F82A4, 0xAB1C5ED5,
+    0xD807AA98, 0x12835B01, 0x243185BE, 0x550C7DC3,
+    0x72BE5D74, 0x80DEB1FE, 0x9BDC06A7, 0xC19BF174,
+    0xE49B69C1, 0xEFBE4786, 0x0FC19DC6, 0x240CA1CC,
+    0x2DE92C6F, 0x4A7484AA, 0x5CB0A9DC, 0x76F988DA,
+    0x983E5152, 0xA831C66D, 0xB00327C8, 0xBF597FC7,
+    0xC6E00BF3, 0xD5A79147, 0x06CA6351, 0x14292967,
+    0x27B70A85, 0x2E1B2138, 0x4D2C6DFC, 0x53380D13,
+    0x650A7354, 0x766A0ABB, 0x81C2C92E, 0x92722C85,
+    0xA2BFE8A1, 0xA81A664B, 0xC24B8B70, 0xC76C51A3,
+    0xD192E819, 0xD6990624, 0xF40E3585, 0x106AA070,
+    0x19A4C116, 0x1E376C08, 0x2748774C, 0x34B0BCB5,
+    0x391C0CB3, 0x4ED8AA4A, 0x5B9CCA4F, 0x682E6FF3,
+    0x748F82EE, 0x78A5636F, 0x84C87814, 0x8CC70208,
+    0x90BEFFFA, 0xA4506CEB, 0xBEF9A3F7, 0xC67178F2
+};
 
-	// Copy state into S
-	for( i=0; i<8; i++ )
-	{
-		S[i] = Context->state[i];
-	}
+#define ROTATE(x,y)  (((x)>>(y)) | ((x)<<(32-(y))))
+#define Sigma0(x)    (ROTATE((x), 2) ^ ROTATE((x),13) ^ ROTATE((x),22))
+#define Sigma1(x)    (ROTATE((x), 6) ^ ROTATE((x),11) ^ ROTATE((x),25))
+#define sigma0(x)    (ROTATE((x), 7) ^ ROTATE((x),18) ^ ((x)>> 3))
+#define sigma1(x)    (ROTATE((x),17) ^ ROTATE((x),19) ^ ((x)>>10))
 
-	// Copy the state into 512-bits into W[0..15]
-	for( i=0; i<16; i++ )
-	{
-		LOAD32H( W[i], Buffer + (4*i) );
-	}
+#define Ch(x,y,z)    (((x) & (y)) ^ ((~(x)) & (z)))
+#define Maj(x,y,z)   (((x) & (y)) ^ ((x) & (z)) ^ ((y) & (z)))
 
-	// Fill W[16..63]
-	for( i=16; i<64; i++ )
-	{
-		W[i] = Gamma1( W[i-2]) + W[i-7] + Gamma0( W[i-15] ) + W[i-16];
-	}
-
-	// Compress
-	for( i=0; i<64; i++ )
-	{
-		Sha256Round( S[0], S[1], S[2], S[3], S[4], S[5], S[6], S[7], i );
-		t = S[7];
-		S[7] = S[6];
-		S[6] = S[5];
-		S[5] = S[4];
-		S[4] = S[3];
-		S[3] = S[2];
-		S[2] = S[1];
-		S[1] = S[0];
-		S[0] = t;
-	}
-
-	// Feedback
-	for( i=0; i<8; i++ )
-	{
-		Context->state[i] = Context->state[i] + S[i];
-	}
+/* Avoid undefined behavior                    */
+/* https://stackoverflow.com/q/29538935/608639 */
+uint32_t B2U32(uint8_t val, uint8_t sh)
+{
+    return ((uint32_t)val) << sh;
 }
 
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//  PUBLIC FUNCTIONS
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//  Sha256Initialise
-//
-//  Initialises a SHA256 Context. Use this to initialise/reset a context.
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void
-	Sha256Initialise
-(
- Sha256Context*      Context         // [out]
- )
+/* Process multiple blocks. The caller is responsible for setting the initial */
+/*  state, and the caller is responsible for padding the final block.        */
+void sha256_process(uint32_t state[8], const uint8_t data[], uint32_t length)
 {
-	Context->curlen = 0;
-	Context->length = 0;
-	Context->state[0] = 0x6A09E667UL;
-	Context->state[1] = 0xBB67AE85UL;
-	Context->state[2] = 0x3C6EF372UL;
-	Context->state[3] = 0xA54FF53AUL;
-	Context->state[4] = 0x510E527FUL;
-	Context->state[5] = 0x9B05688CUL;
-	Context->state[6] = 0x1F83D9ABUL;
-	Context->state[7] = 0x5BE0CD19UL;
+    uint32_t a, b, c, d, e, f, g, h, s0, s1, T1, T2;
+    uint32_t X[16], i;
+
+    size_t blocks = length / 64;
+    while (blocks--)
+    {
+        a = state[0];
+        b = state[1];
+        c = state[2];
+        d = state[3];
+        e = state[4];
+        f = state[5];
+        g = state[6];
+        h = state[7];
+
+        for (i = 0; i < 16; i++)
+        {
+            X[i] = B2U32(data[0], 24) | B2U32(data[1], 16) | B2U32(data[2], 8) | B2U32(data[3], 0);
+            data += 4;
+
+            T1 = h;
+            T1 += Sigma1(e);
+            T1 += Ch(e, f, g);
+            T1 += K256[i];
+            T1 += X[i];
+
+            T2 = Sigma0(a);
+            T2 += Maj(a, b, c);
+
+            h = g;
+            g = f;
+            f = e;
+            e = d + T1;
+            d = c;
+            c = b;
+            b = a;
+            a = T1 + T2;
+        }
+
+        for (; i < 64; i++)
+        {
+            s0 = X[(i + 1) & 0x0f];
+            s0 = sigma0(s0);
+            s1 = X[(i + 14) & 0x0f];
+            s1 = sigma1(s1);
+
+            T1 = X[i & 0xf] += s0 + s1 + X[(i + 9) & 0xf];
+            T1 += h + Sigma1(e) + Ch(e, f, g) + K256[i];
+            T2 = Sigma0(a) + Maj(a, b, c);
+            h = g;
+            g = f;
+            f = e;
+            e = d + T1;
+            d = c;
+            c = b;
+            b = a;
+            a = T1 + T2;
+        }
+
+        state[0] += a;
+        state[1] += b;
+        state[2] += c;
+        state[3] += d;
+        state[4] += e;
+        state[5] += f;
+        state[6] += g;
+        state[7] += h;
+    }
 }
 
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//  Sha256Update
-//
-//  Adds data to the SHA256 context. This will process the data and update the internal state of the context. Keep on
-//  calling this function until all the data has been added. Then call Sha256Finalise to calculate the hash.
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void
-	Sha256Update
-(
- Sha256Context*      Context,        // [in out]
- void const*         Buffer,         // [in]
- uint32_t            BufferSize      // [in]
- )
-{
-	uint32_t n;
-
-	if( Context->curlen > sizeof(Context->buf) )
-	{
-		return;
+void sha256_calculate(uint32_t state[8], uint32_t key){
+	for(int i = 0; i < 4; i++){
+		msg[i] = ((uint8_t*)&key)[i];
 	}
+    state[0] = 0x6A09E667UL;
+	state[1] = 0xBB67AE85UL;
+	state[2] = 0x3C6EF372UL;
+	state[3] = 0xA54FF53AUL;
+	state[4] = 0x510E527FUL;
+	state[5] = 0x9B05688CUL;
+	state[6] = 0x1F83D9ABUL;
+	state[7] = 0x5BE0CD19UL;
 
-	while( BufferSize > 0 )
-	{
-		if( Context->curlen == 0 && BufferSize >= BLOCK_SIZE )
-		{
-			TransformFunction( Context, (uint8_t*)Buffer );
-			Context->length += BLOCK_SIZE * 8;
-			Buffer = (uint8_t*)Buffer + BLOCK_SIZE;
-			BufferSize -= BLOCK_SIZE;
-		}
-		else
-		{
-			n = MIN( BufferSize, (BLOCK_SIZE - Context->curlen) );
-			memcpy( Context->buf + Context->curlen, Buffer, (size_t)n );
-			Context->curlen += n;
-			Buffer = (uint8_t*)Buffer + n;
-			BufferSize -= n;
-			if( Context->curlen == BLOCK_SIZE )
-			{
-				TransformFunction( Context, Context->buf );
-				Context->length += 8*BLOCK_SIZE;
-				Context->curlen = 0;
-			}
-		}
-	}
+	sha256_process(state, msg, sizeof(msg));
 }
 
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//  Sha256Finalise
-//
-//  Performs the final calculation of the hash and returns the digest (32 byte buffer containing 256bit hash). After
-//  calling this, Sha256Initialised must be used to reuse the context.
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void
-	Sha256Finalise
-(
- Sha256Context*      Context,        // [in out]
- SHA256_HASH*        Digest          // [out]
- )
+#if defined(TEST_MAIN)
+
+#include <stdio.h>
+#include <string.h>
+int main(int argc, char* argv[])
 {
-	int i;
+    /* empty message with padding */
+    uint8_t message[64];
+    memset(message, 0x00, sizeof(message));
+    message[0] = 0x80;
 
-	if( Context->curlen >= sizeof(Context->buf) )
-	{
-		return;
-	}
+    /* initial state */
+    uint32_t state[8] = {
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+    };
 
-	// Increase the length of the message
-	Context->length += Context->curlen * 8;
+    sha256_process(state, message, sizeof(message));
 
-	// Append the '1' bit
-	Context->buf[Context->curlen++] = (uint8_t)0x80;
+    const uint8_t b1 = (uint8_t)(state[0] >> 24);
+    const uint8_t b2 = (uint8_t)(state[0] >> 16);
+    const uint8_t b3 = (uint8_t)(state[0] >>  8);
+    const uint8_t b4 = (uint8_t)(state[0] >>  0);
+    const uint8_t b5 = (uint8_t)(state[1] >> 24);
+    const uint8_t b6 = (uint8_t)(state[1] >> 16);
+    const uint8_t b7 = (uint8_t)(state[1] >>  8);
+    const uint8_t b8 = (uint8_t)(state[1] >>  0);
 
-	// if the length is currently above 56 bytes we append zeros
-	// then compress.  Then we can fall back to padding zeros and length
-	// encoding like normal.
-	if( Context->curlen > 56 )
-	{
-		while( Context->curlen < 64 )
-		{
-			Context->buf[Context->curlen++] = (uint8_t)0;
-		}
-		TransformFunction(Context, Context->buf);
-		Context->curlen = 0;
-	}
+    /* e3b0c44298fc1c14... */
+    printf("SHA256 hash of empty message: ");
+    printf("%02X%02X%02X%02X%02X%02X%02X%02X...\n",
+        b1, b2, b3, b4, b5, b6, b7, b8);
 
-	// Pad up to 56 bytes of zeroes
-	while( Context->curlen < 56 )
-	{
-		Context->buf[Context->curlen++] = (uint8_t)0;
-	}
+    int success = ((b1 == 0xE3) && (b2 == 0xB0) && (b3 == 0xC4) && (b4 == 0x42) &&
+                    (b5 == 0x98) && (b6 == 0xFC) && (b7 == 0x1C) && (b8 == 0x14));
 
-	// Store length
-	STORE64H( Context->length, Context->buf+56 );
-	TransformFunction( Context, Context->buf );
+    if (success)
+        printf("Success!\n");
+    else
+        printf("Failure!\n");
 
-	// Copy output
-	for( i=0; i<8; i++ )
-	{
-		STORE32H( Context->state[i], Digest->bytes+(4*i) );
-	}
+    return (success != 0 ? 0 : 1);
 }
 
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//  Sha256Calculate
-//
-//  Combines Sha256Initialise, Sha256Update, and Sha256Finalise into one function. Calculates the SHA256 hash of the
-//  buffer.
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void
-	Sha256Calculate
-(
- void  const*        Buffer,         // [in]
- uint32_t            BufferSize,     // [in]
- SHA256_HASH*        Digest          // [in]
- )
-{
-	Sha256Context context;
-
-	Sha256Initialise( &context );
-	Sha256Update( &context, Buffer, BufferSize );
-	Sha256Finalise( &context, Digest );
-}
-
+#endif
