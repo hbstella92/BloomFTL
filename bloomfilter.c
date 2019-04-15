@@ -307,6 +307,7 @@ uint64_t bf_bytes(BF* input) {
 	return bytes;
 }
 
+/*
 int bf_set(BF** input, int idx, KEYT key) {
 	if(input[idx] == NULL) return -1;
 	
@@ -330,81 +331,108 @@ int bf_set(BF** input, int idx, KEYT key) {
 	}
     return global_bf_idx; // return value: global idx of BF
 }
+*/
 
-bool symbol_check(BF** input, int idx, KEYT key, char* symbol, int symb_length, int front_byte, int front_bit, int start, uint8_t* symb_arr, int symb_arr_sz) {
-    //if(input[idx] == NULL) return false;
+void symbol_set(BF** input, int idx, KEYT key, uint8_t* symbol, uint64_t* sym_start, uint64_t* sym_length){
+	int end_byte = (sym_start[idx] + sym_length[idx] - 1) / 8;
+	int end_bit = (sym_start[idx] + sym_length[idx] - 1) % 8;
+	int symb_arr_sz = end_byte - (sym_start[idx] / 8) + 1;
+	int remain_chunk = sym_length[idx];
+	int chunk_cnt = 0;
+	uint8_t chunk_sz = end_bit + 1;
+	KEYT h;
 
-    KEYT h;
-    //int block, offset;
-    //int mask, shift;
-    int chunk_sz = ((((front_bit >> 3) + 1) << 3) - front_bit);
-    //int first_chunk_flag=1;
-    //int last_chunk_flag=0;
-    int remain_chunk = symb_length;
-    int chunk_cnt=0;
-    uint32_t comp_symb;
-    //uint32_t test[NUM_CHUNK] = {0,};
-    int next_chunk_sz = remain_chunk - chunk_sz;
+	h = hashfunction((key << 19)) % input[idx]->m;
 
-    if(next_chunk_sz <= 0) {
-        chunk_sz = symb_length;
-        next_chunk_sz = 0;
-    }
-
-    uint32_t test=0, tmp=0;
-
-	tmp = (uint8_t)symbol[front_byte];
-	remain_chunk -= chunk_sz;
-	next_chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
-	if (next_chunk_sz == 0) {
-		tmp &= (1 << (8 - front_bit)) - 1;
-		test = tmp >> (8 - (front_bit + chunk_sz));
-	} else {
-           tmp &= ((1 << chunk_sz) - 1);
-		test = tmp << next_chunk_sz;
+	if(remain_chunk - chunk_sz <= 0){
+		chunk_sz = sym_length[idx];
 	}
-	chunk_sz = next_chunk_sz;
+
+	// 1
+	remain_chunk -= chunk_sz;
+	if(end_bit == 7){
+		symbol[end_byte] |= h << (8 - chunk_sz);
+	}
+	else{
+		symbol[end_byte] |= h & ((1 << chunk_sz) - 1);
+	}
 	chunk_cnt++;
-
-	if (chunk_cnt == symb_arr_sz) goto finish;
-	
-	tmp = (uint8_t)symbol[front_byte + 1];
-	remain_chunk -= chunk_sz;
-	next_chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
-	if (chunk_cnt == symb_arr_sz - 1) {
-		tmp >>= 8 - chunk_sz;
-		test |= tmp;
-	} else {
-		test |= tmp;
-		test <<= next_chunk_sz;
-	}
-	chunk_sz = next_chunk_sz;
-	chunk_cnt++;
-
-
-	if (chunk_cnt == symb_arr_sz) goto finish;
-	
-	tmp = (uint8_t)symbol[front_byte + 2];
-	remain_chunk -= chunk_sz;
-	next_chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
-	if (chunk_cnt == symb_arr_sz - 1) {
-		tmp >>= 8 - chunk_sz;
-		test |= tmp;
-	} else {
-		test |= tmp;
-		test <<= next_chunk_sz;
-	}
-	chunk_sz = next_chunk_sz;
-
-finish:
-    h = hashfunction((key << 19));
-    h %= input[idx]->m;
-
-    if(start+test != (((start + h) & 0xFFFFFFF8) + (start + h) % 8)) {
-        return false;
+	if(chunk_cnt == symb_arr_sz){
+	    return;
     }
+	h >>= chunk_sz;
+	chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
 
+	// 2
+	remain_chunk -= chunk_sz;
+	symbol[end_byte - 1] |= h << (8 - chunk_sz);
+	chunk_cnt++;
+	if(chunk_cnt == symb_arr_sz){
+	    return;
+	}
+	h >>= chunk_sz;
+	chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
+
+	// 3
+	symbol[end_byte - 2] |= h << (8 - chunk_sz);
+}
+
+bool symbol_check(BF** input, int idx, KEYT key, uint8_t* symbol, uint64_t* sym_start, uint64_t* sym_length){
+	int end_byte = (sym_start[idx] + sym_length[idx] - 1) / 8;
+	int end_bit = (sym_start[idx] + sym_length[idx] - 1) % 8;
+	int symb_arr_sz = end_byte - (sym_start[idx] / 8) + 1;
+	int remain_chunk = sym_length[idx];
+	int chunk_cnt = 0;
+	uint8_t chunk_sz = end_bit + 1;
+	KEYT h;
+	
+	h = hashfunction((key << 19)) % input[idx]->m;
+
+	if(remain_chunk - chunk_sz <= 0){
+		chunk_sz = sym_length[idx];
+	}
+
+	// 1
+	remain_chunk -= chunk_sz;
+	if(end_bit == 7){
+		if(((h & ((1 << chunk_sz) - 1)) ^ (symbol[end_byte] >> (8 - chunk_sz)))){
+            goto not_exist;
+		}
+	}
+	else{
+		if((h ^ symbol[end_byte]) & ((1 << chunk_sz) - 1)){
+            goto not_exist;
+		}
+	}
+	chunk_cnt++;
+	if(chunk_cnt == symb_arr_sz){
+        goto exist;
+	}
+	h >>= chunk_sz;
+	chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
+
+	// 2
+	remain_chunk -= chunk_sz;
+	if((h & ((1 << chunk_sz) - 1)) ^ (symbol[end_byte - 1] >> (8 - chunk_sz))){
+        goto not_exist;
+	}
+	chunk_cnt++;
+	if(chunk_cnt == symb_arr_sz){
+        goto exist;
+	}
+	h >>= chunk_sz;
+	chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
+
+	// 3
+	if((h & ((1 << chunk_sz) - 1)) ^ (symbol[end_byte - 2] >> (8 - chunk_sz))){
+        goto not_exist;
+	}
+
+exist:
     return true;
+
+not_exist:
+    return false;
 }
 
 #if 0
