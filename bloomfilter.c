@@ -15,112 +15,12 @@
 
 extern int save_fd;
 
-void BITSET(char *input, char offset){
+static inline void BITSET(char *input, char offset){
     (*input) |= (1 << offset);
 }
 
-bool BITGET(char input, char offset){
+static inline bool BITGET(char input, char offset){
     return input & (1 << offset);
-}
-
-static FORCE_INLINE uint32_t rotl32 ( uint32_t x, int8_t r )
-{
-	return (x << r) | (x >> (32 - r));
-}
-
-static FORCE_INLINE uint64_t rotl64 ( uint64_t x, int8_t r )
-{
-	return (x << r) | (x >> (64 - r));
-}
-
-#define	ROTL32(x,y)	rotl32(x,y)
-#define ROTL64(x,y)	rotl64(x,y)
-
-#define BIG_CONSTANT(x) (x##LLU)
-
-//-----------------------------------------------------------------------------
-//// Block read - if your platform needs to do endian-swapping or can only
-//// handle aligned reads, do the conversion here
-//
-#define getblock(p, i) (p[i])
-//
-
-static FORCE_INLINE uint32_t fmix32 ( uint32_t h )
-{
-	h ^= h >> 16;
-	h *= 0x85ebca6b;
-	h ^= h >> 13;
-	h *= 0xc2b2ae35;
-	h ^= h >> 16;
-
-	return h;
-}
-static FORCE_INLINE uint64_t fmix64 ( uint64_t k )
-{
-	k ^= k >> 33;
-	k *= BIG_CONSTANT(0xff51afd7ed558ccd);
-	k ^= k >> 33;
-	k *= BIG_CONSTANT(0xc4ceb9fe1a85ec53);
-	k ^= k >> 33;
-
-	return k;
-}
-
-void MurmurHash3_x86_32( const void * key, int len,uint32_t seed, void * out )
-{
-	const uint8_t * data = (const uint8_t*)key;
-	const int nblocks = len / 4;
-	int i;
-
-uint32_t h1 = seed;
-
-	uint32_t c1 = 0xcc9e2d51;
-	uint32_t c2 = 0x1b873593;
-	const uint32_t * blocks = (const uint32_t *)(data + nblocks*4);
-
-	for(i = -nblocks; i; i++)
-	{
-		uint32_t k1 = getblock(blocks,i);
-
-		k1 *= c1;
-		k1 = ROTL32(k1,15);
-		k1 *= c2;
-
-		h1 ^= k1;
-		h1 = ROTL32(h1,13); 
-		h1 = h1*5+0xe6546b64;
-	}
-	const uint8_t * tail = (const uint8_t*)(data + nblocks*4);
-
-	uint32_t k1 = 0;
-
-	switch(len & 3)
-	{
-		case 3: k1 ^= tail[2] << 16;
-		case 2: k1 ^= tail[1] << 8;
-		case 1: k1 ^= tail[0];
-				k1 *= c1; k1 = ROTL32(k1,15); k1 *= c2; h1 ^= k1;
-	}; h1 ^= len;
-
-	h1 = fmix32(h1);
-
-	*(uint32_t*)out = h1;
-} 
-
-KEYT hashfunction(KEYT key){
-	key ^= key >> 15;
-	key *= UINT32_C(0x2c1b3c6d);
-	key ^= key >> 12;
-	key *= UINT32_C(0x297a2d39);
-	key ^= key >> 15;
-	/*
-	key = ~key + (key << 15); // key = (key << 15) - key - 1;
-	key = key ^ (key >> 12);
-	key = key + (key << 2);
-	key = key ^ (key >> 4);
-	key = key * 2057; // key = (key + (key << 3)) + (key << 11);
-	key = key ^ (key >> 16);*/
-	return key;
 }
 
 // Compressible bf_init (# of hash func is set to 1)
@@ -333,7 +233,7 @@ int bf_set(BF** input, int idx, KEYT key) {
 }
 */
 
-void symbol_set(BF** input, int idx, KEYT key, uint8_t* symbol, uint64_t* sym_start, uint64_t* sym_length){
+void symbol_set(uint64_t bf_bits, int idx, KEYT key, uint8_t* symbol, uint64_t* sym_start, uint64_t* sym_length, bool seq_flag){
 	int end_byte = (sym_start[idx] + sym_length[idx] - 1) / 8;
 	int end_bit = (sym_start[idx] + sym_length[idx] - 1) % 8;
 	int symb_arr_sz = end_byte - (sym_start[idx] / 8) + 1;
@@ -342,7 +242,7 @@ void symbol_set(BF** input, int idx, KEYT key, uint8_t* symbol, uint64_t* sym_st
 	uint8_t chunk_sz = end_bit + 1;
 	KEYT h;
 
-	h = hashfunction((key << 19)) % input[idx]->m;
+	h = hashfunction((key << 19)) % bf_bits;
 
 	if(remain_chunk - chunk_sz <= 0){
 		chunk_sz = sym_length[idx];
@@ -358,7 +258,8 @@ void symbol_set(BF** input, int idx, KEYT key, uint8_t* symbol, uint64_t* sym_st
 	}
 	chunk_cnt++;
 	if(chunk_cnt == symb_arr_sz){
-	    return;
+	    goto task_end;
+	    //return;
     }
 	h >>= chunk_sz;
 	chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
@@ -368,16 +269,21 @@ void symbol_set(BF** input, int idx, KEYT key, uint8_t* symbol, uint64_t* sym_st
 	symbol[end_byte - 1] |= h << (8 - chunk_sz);
 	chunk_cnt++;
 	if(chunk_cnt == symb_arr_sz){
-	    return;
+	    goto task_end;
+	    //return;
 	}
 	h >>= chunk_sz;
 	chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
 
 	// 3
 	symbol[end_byte - 2] |= h << (8 - chunk_sz);
+
+task_end:
+	return;
 }
 
-bool symbol_check(BF** input, int idx, KEYT key, uint8_t* symbol, uint64_t* sym_start, uint64_t* sym_length){
+/*
+static inline bool symbol_check(BF** input, int idx, KEYT key, uint8_t* symbol, uint64_t* sym_start, uint64_t* sym_length){
 	int end_byte = (sym_start[idx] + sym_length[idx] - 1) / 8;
 	int end_bit = (sym_start[idx] + sym_length[idx] - 1) % 8;
 	int symb_arr_sz = end_byte - (sym_start[idx] / 8) + 1;
@@ -434,125 +340,7 @@ exist:
 not_exist:
     return false;
 }
-
-#if 0
-bool symbol_check(BF** input, int idx, KEYT key, char* symbol, int symb_length, int front_byte, int front_bit, int start, uint8_t* symb_arr, int symb_arr_sz) {
-    if(input[idx] == NULL) return false;
-
-	struct timeval strt, end;
-    KEYT h;
-	//gettimeofday(&strt, NULL);
-    int block, offset;
-    int mask, shift;
-    int chunk_sz = ((((front_bit / 8) + 1) * 8) - front_bit);
-    int first_chunk_flag=1;
-    int last_chunk_flag=0;
-    int remain_chunk = symb_length;
-    int chunk_cnt=0;
-    uint32_t comp_symb;
-    uint32_t test[CHUNK_NUM] = {0,};
-    int next_chunk_sz = remain_chunk - chunk_sz;
-
-    if(next_chunk_sz <= 0) {
-        chunk_sz = symb_length;
-        next_chunk_sz = 0;
-    }
-	
-	//memcpy(symb_arr, &symbol[front_byte], symb_arr_sz);
-    for(int i=0; i<symb_arr_sz; i++) {
-        //memcpy(&symb_arr[i], &symbol[front_byte+i], 1);
-		//test[i] = symb_arr[i];
-		test[i] = symbol[front_byte+i];
-
-        if(first_chunk_flag) {
-            if(remain_chunk < 8) {
-                if(next_chunk_sz == 0) {
-                    if(!((front_bit + chunk_sz) % 8)) {
-                        mask = ((1 << chunk_sz) - 1);
-                        
-                        test[i] &= mask;
-                    } else {
-                        shift = 8 - front_bit - chunk_sz;
-                        mask = ((1 << chunk_sz) - 1);
-
-                       	test[i] >>= shift;
-                        test[i] &= mask;
-                    }
-                } else {
-                    mask = ((1 << chunk_sz) - 1);
-                    shift = next_chunk_sz;
-
-                    test[i] &= mask;
-                    test[i] <<= shift;
-                }
-            } else if(chunk_sz < 8) {
-                mask = ((1 << chunk_sz) - 1);
-                shift = symb_length - chunk_sz;
-
-                test[i] &= mask;
-                test[i] <<= shift;
-            } else {
-                shift = symb_length - chunk_sz;
-
-                test[i] <<= shift;
-            }
-            
-            first_chunk_flag = 0;
-        } else {
-            if(last_chunk_flag) {
-                if(chunk_sz < 8) {
-                    shift = 8 - chunk_sz;
-
-                    test[i] >>= shift;
-                }
-            } else {
-                shift = next_chunk_sz;
-                test[i] <<= shift;
-            }
-        }
-        remain_chunk -= chunk_sz;
-        front_bit += chunk_sz;
-
-        if(remain_chunk < 8) {
-            last_chunk_flag = 1;
-        }
-        
-        if(remain_chunk >= 8) {
-            chunk_sz = 8;
-            next_chunk_sz -= 8;
-        } else {
-            chunk_sz = remain_chunk;
-        }
-        chunk_cnt++;
-    }
-    
-    uint32_t res = 0;
-    for(int i=0; i<chunk_cnt; i++) {
-        res |= test[i];
-    }
-	//gettimeofday(&end, NULL);
-	//d_t += ((end.tv_sec - strt.tv_sec) * 1000000) + (end.tv_usec - strt.tv_usec);
-
-	//gettimeofday(&strt, NULL);
-    for(uint32_t i=0; i<input[idx]->k; i++) {
-        h = hashfunction((key << 19) | (i << 7));
-        h %= input[idx]->m;
-        
-        block = (start + h) / 8;
-        offset = (start + h) % 8;
-        
-        comp_symb = 8 * block + offset;
-
-        if(start+res != comp_symb) {
-            return false;
-        }
-    }
-	//gettimeofday(&end, NULL);
-	//h_t += ((end.tv_sec - strt.tv_sec) * 1000000) + (end.tv_usec - strt.tv_usec);
-
-    return true;
-}
-#endif
+*/
 
 bool bf_check(BF** input, int idx, KEYT key) {
 	if(input[idx] == NULL) return false;
