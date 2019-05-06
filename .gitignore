@@ -25,3 +25,10 @@ benchmark/
 output/
 dict/
 experiment/
+
+#BENCHMARK
+real_trace
+trace_rocksdb
+
+*.cpp
+*.out
