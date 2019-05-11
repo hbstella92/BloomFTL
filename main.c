@@ -26,9 +26,9 @@
 #define DATA_SET (TOTAL_PAGE)
 
 // Buffered write
-#define BUF_SZ 4
-#define PP_SZ ((LP_SZ)*(BUF_SZ)) // physical page size
-#define BLOCK_PPN ((PAGE_PER_BLOCK)/(BUF_SZ)) // 128
+//#define BUF_SZ 4
+//#define PP_SZ ((LP_SZ)*(BUF_SZ)) // physical page size
+//#define BLOCK_PPN ((PAGE_PER_BLOCK)/(BUF_SZ)) // 128
 
 // Reblooming-related
 #define REBLOOM (int)((PAGE_PER_BLOCK)*0.5)
@@ -80,7 +80,7 @@ typedef struct {
     int buf_sz;
 } BlockBuffer; // TODO: change to struct Page
 
-BlockBuffer** block_buffer;
+//BlockBuffer** block_buffer;
 
 typedef struct {
     uint32_t page;
@@ -145,7 +145,6 @@ void bloom_init() {
     double true_p=0.0, false_p=0.0;
 
     mask = (int)(log(PAGE_PER_BLOCK) / log(2));
-    //mask = (1 << (int)(log(PAGE_PER_BLOCK) / log(2))) - 1;
 
     // Alloc && Initialize SBlkManager
     sblk_man = (SBlkManager*)malloc(sizeof(SBlkManager));
@@ -232,6 +231,7 @@ void bloom_init() {
     }
 
     // Alloc memory for block buffer
+/*
     block_buffer = (BlockBuffer**)malloc(sizeof(BlockBuffer*) * CHIP);
     for(int c=0; c<CHIP; c++) {
         block_buffer[c] = (BlockBuffer*)malloc(sizeof(BlockBuffer) * BLOCK_PER_CHIP);
@@ -246,6 +246,7 @@ void bloom_init() {
             block_buffer[c][b].buf_sz = 0;
         }
     }
+*/
 }
 
 void bloom_destroy() {
@@ -258,9 +259,10 @@ void bloom_destroy() {
             free(bf_man->bits_per_pg[c][b]);
             
             bf_free(global_bf[c][b].bfchip_arr, PAGE_PER_BLOCK);
-
+/*
             free(block_buffer[c][b].lpa);
             free(block_buffer[c][b].value);
+*/
         }
 
         free(bf_man->bytes_arr[c]);
@@ -268,8 +270,9 @@ void bloom_destroy() {
         free(bf_man->bits_per_blk[c]);
 
         free(global_bf[c]);
-
+/*
         free(block_buffer[c]);
+*/
     }
 
     free(bf_man->bytes_arr);
@@ -278,8 +281,9 @@ void bloom_destroy() {
     free(bf_man->bits_per_chip);
     free(bf_man);
     free(global_bf);
-
+/*
     free(block_buffer);
+*/
 
     for(int w=0; w<WAY; w++) {
         for(int ch=0; ch<CHANNEL; ch++) {
@@ -394,7 +398,6 @@ void make_test_set(uint32_t *w_arr, uint32_t *r_arr, char *w_t, char *r_t, uint8
         while(make_cnt < test_size) {
             lpa = rand() % TOTAL_PAGE;
             pbn = lpa >> mask; // random write
-            //pbn = (lpa >> 2) & mask;
 
             if(page_usage[pbn] == PAGE_PER_BLOCK) {
                 continue;
@@ -478,7 +481,7 @@ int lpa_compare(void* a, void* b) {
 void symbol_resymbolize(uint32_t pbn, int chip, int way, int chnl, int blk, int valid_start, int num_flush) {
     uint32_t hashkey;
 
-    storage.chip_arr[way][chnl].data_blk[blk].empty += (num_flush / BUF_SZ);
+    storage.chip_arr[way][chnl].data_blk[blk].empty += num_flush;
     
     free(global_symb.symbol[chip][blk]);
     sblk_man->num_bf[pbn] = 0;
@@ -486,7 +489,7 @@ void symbol_resymbolize(uint32_t pbn, int chip, int way, int chnl, int blk, int 
     global_symb.symbol[chip][blk] = (uint8_t*)malloc(sizeof(uint8_t) * st_man->sym_bytes_total);
     memset(global_symb.symbol[chip][blk], 0, sizeof(uint8_t) * st_man->sym_bytes_total);
 
-    int ppa_end_idx = storage.chip_arr[way][chnl].data_blk[blk].empty * BUF_SZ;
+    int ppa_end_idx = storage.chip_arr[way][chnl].data_blk[blk].empty;
     int new_bf_idx = 1;
     
     // Set new symbol and Set dead bit for lpa and ppa (TODO: BF's new start idx is 1)
@@ -564,9 +567,9 @@ void bloom_gc(uint32_t* pbn, int* chip, int* way, int* chnl, int* blk, int* ppn,
         }
     }
 
-    int ppa_end = (*ppn) * BUF_SZ;
+    int end_idx = storage.chip_arr[*way][*chnl].data_blk[*blk].empty;
     for(int i=0; i<num_valid; i++) {
-        for(int j=ppa_end-1; j>=0; j--) {
+        for(int j=end_idx-1; j>=0; j--) {
             if(valid_list[i].oob == storage.chip_arr[*way][*chnl].data_blk[*blk].page_arr[j].oob) {
                 valid_list[i].page = storage.chip_arr[*way][*chnl].data_blk[*blk].page_arr[j].page;
                 break;
@@ -588,58 +591,12 @@ void bloom_gc(uint32_t* pbn, int* chip, int* way, int* chnl, int* blk, int* ppn,
     
     memset(global_symb.ppa_flag[*pbn], 0, sizeof(int) * PAGE_PER_BLOCK);
     
-    int num_need_buf = num_valid % BUF_SZ;
-    bool need_buf = num_need_buf ? true : false;
-
     // Flush valid pages
-    memcpy(storage.chip_arr[*way][*chnl].data_blk[*blk].page_arr, valid_list, sizeof(Page) * (num_valid - num_need_buf));
-    symbol_resymbolize(*pbn, *chip, *way, *chnl, *blk, 0, (num_valid - num_need_buf));
+    memcpy(storage.chip_arr[*way][*chnl].data_blk[*blk].page_arr, valid_list, sizeof(Page) * num_valid);
+    symbol_resymbolize(*pbn, *chip, *way, *chnl, *blk, 0, num_valid);
     
-    *ppn = storage.chip_arr[*way][*chnl].data_blk[*blk].empty;
-    disk_write_cnt += (num_valid - num_need_buf);
+    disk_write_cnt += num_valid;
 
-    // Buffer if there are remained valid pages
-    if(need_buf == true) {
-        int buf_sz = block_buffer[*chip][*blk].buf_sz;
-
-        for(int i=buf_sz, j=0; i<buf_sz+num_need_buf; i++, j++) {
-            if(i == BUF_SZ) {
-                int lpa_start = (*ppn) * BUF_SZ;
-                
-                if(lpa_start == PAGE_PER_BLOCK) {
-                    printf("This is GC error\n");
-                    exit(1);
-                }
-
-                for(int k=0; k<BUF_SZ; k++) {
-                    // TODO: how to synchronize BF's start?
-                    if(lpa_start + k != 0) {
-                        hashkey = hashing_key(block_buffer[*chip][*blk].lpa[k]);
-                        symbol_set(bf_man->bits_per_pg[*chip][*blk][lpa_start + k], lpa_start + k, hashkey + lpa_start + k, \
-                                global_symb.symbol[*chip][*blk], st_man->sym_start, st_man->sym_bits_pg, false);
-
-                        sblk_man->num_bf[*pbn]++;
-                    }
-
-                    storage.chip_arr[*way][*chnl].data_blk[*blk].page_arr[lpa_start + k].page = block_buffer[*chip][*blk].value[k];
-                    storage.chip_arr[*way][*chnl].data_blk[*blk].page_arr[lpa_start + k].oob = block_buffer[*chip][*blk].lpa[k];
-
-                    global_symb.lpa_flag[*pbn][lpa_start + k] = 1;
-                    global_symb.ppa_flag[*pbn][lpa_start + k] = 1;
-
-                    disk_write_cnt++;
-                }
-
-                storage.chip_arr[*way][*chnl].data_blk[*blk].empty++;
-                buf_sz = block_buffer[*chip][*blk].buf_sz = 0;
-            }
-
-            block_buffer[*chip][*blk].lpa[(i % BUF_SZ)] = valid_list[num_valid - num_need_buf + j].oob;
-            block_buffer[*chip][*blk].value[(i % BUF_SZ)] = valid_list[num_valid - num_need_buf + j].page;
-            block_buffer[*chip][*blk].buf_sz++;
-        }
-    }
-    
     free(valid_list);
 }
 
@@ -648,8 +605,8 @@ void bloom_rebloom(uint32_t* pbn, int* chip, int* way, int* chnl, int* blk, int*
     uint32_t hashkey;
     int num_candi = 0, num_evict = 0, candi_sz = 0;
 
-    num_candi = storage.chip_arr[*way][*chnl].data_blk[*blk].empty * BUF_SZ;
-
+    num_candi = storage.chip_arr[*way][*chnl].data_blk[*blk].empty;
+    
     candi_list = (Page*)malloc(sizeof(Page) * num_candi);
     evict_list = (Page*)malloc(sizeof(Page) * num_candi);
 
@@ -716,172 +673,37 @@ void bloom_rebloom(uint32_t* pbn, int* chip, int* way, int* chnl, int* blk, int*
     }
 
     // Append rebloomed pages
-    bool need_buf = false;
-    int buf_sz;
     int remain_evict = num_evict;
-    int num_need_buf = remain_evict % BUF_SZ;
+    for(int i=0, p=num_candi; i<num_evict; i++, p++) {
+        if(p == PAGE_PER_BLOCK) {
+            symbol_resymbolize(*pbn, *chip, *way, *chnl, *blk, num_candi, num_evict);
+
+            bloom_gc(pbn, chip, way, chnl, blk, ppn, NULL, 0);
+
+            p = 0;
+            num_candi = 0;
+            remain_evict = num_evict - i;
+        }
+
+        storage.chip_arr[*way][*chnl].data_blk[*blk].page_arr[p] = evict_list[i];
+
+        disk_write_cnt++;
+    }
+
+    symbol_resymbolize(*pbn, *chip, *way, *chnl, *blk, num_candi, remain_evict);
     
-    *ppn = storage.chip_arr[*way][*chnl].data_blk[*blk].empty;
-
-    if(!num_need_buf) {
-        for(int i=0, p=num_candi; i<num_evict; i++, p++) {
-            if(p == PAGE_PER_BLOCK) {
-                symbol_resymbolize(*pbn, *chip, *way, *chnl, *blk, num_candi, num_evict);
-                
-                bloom_gc(pbn, chip, way, chnl, blk, ppn, NULL, 0);
-
-                p = 0;
-                num_candi = 0;
-                remain_evict = num_evict - i;
-                num_need_buf = remain_evict % BUF_SZ;
-
-                if(num_need_buf != 0) {
-                    remain_evict -= num_need_buf;
-                    need_buf = true;
-                }
-            }
-
-            if((p == remain_evict) && need_buf) {
-                break;
-            }
-
-            storage.chip_arr[*way][*chnl].data_blk[*blk].page_arr[p] = evict_list[i];
-
-            disk_write_cnt++;
-        }
-
-        symbol_resymbolize(*pbn, *chip, *way, *chnl, *blk, num_candi, remain_evict);
-
-        if(need_buf == true) {
-            buf_sz = block_buffer[*chip][*blk].buf_sz;
-
-            for(int i=buf_sz, j=0; i<buf_sz+num_need_buf; i++, j++) {
-                if(i == BUF_SZ) {
-                    int lpa_start = (*ppn) * BUF_SZ;
-
-                    if(lpa_start == PAGE_PER_BLOCK) {
-                        bloom_gc(pbn, chip, way, chnl, blk, ppn, NULL, 0);
-
-                        lpa_start = (*ppn) * BUF_SZ;
-                    }
-                    
-                    for(int k=0; k<BUF_SZ; k++) {
-                    // TODO: how to synchronize BF's start?
-                        if(lpa_start + k != 0) {
-                            hashkey = hashing_key(block_buffer[*chip][*blk].lpa[k]);
-                            symbol_set(bf_man->bits_per_pg[*chip][*blk][lpa_start + k], lpa_start + k, hashkey + lpa_start + k, \
-                                    global_symb.symbol[*chip][*blk], st_man->sym_start, st_man->sym_bits_pg, false);
-
-                            sblk_man->num_bf[*pbn]++;
-                        }
-
-                        storage.chip_arr[*way][*chnl].data_blk[*blk].page_arr[lpa_start + k].page = block_buffer[*chip][*blk].value[k];
-                        storage.chip_arr[*way][*chnl].data_blk[*blk].page_arr[lpa_start + k].oob = block_buffer[*chip][*blk].lpa[k];
-
-                        global_symb.ppa_flag[*pbn][lpa_start + k] = 1;
-
-                        disk_write_cnt++;
-                    }
-
-                    storage.chip_arr[*way][*chnl].data_blk[*blk].empty++;
-                    buf_sz = block_buffer[*chip][*blk].buf_sz = 0;
-                }
-                
-                block_buffer[*chip][*blk].lpa[(i % BUF_SZ)] = evict_list[num_evict-num_need_buf+j].oob;
-                block_buffer[*chip][*blk].value[(i % BUF_SZ)] = evict_list[num_evict-num_need_buf+j].page;
-                block_buffer[*chip][*blk].buf_sz++;
-            }
-        }
-    }
-    else {
-        need_buf = true;
-
-        for(int i=0, p=num_candi; i<num_evict; i++, p++) {
-            if(p == PAGE_PER_BLOCK) {
-                symbol_resymbolize(*pbn, *chip, *way, *chnl, *blk, num_candi, num_evict);
-
-                bloom_gc(pbn, chip, way, chnl, blk, ppn, NULL, 0);
-
-                p = 0;
-                num_candi = 0;
-                remain_evict = num_evict - i;
-                num_need_buf = remain_evict % BUF_SZ;
-
-                if(num_need_buf != 0) {
-                    remain_evict -= num_need_buf;
-                }
-                else {
-                    need_buf = false;
-                }
-            }
-            
-            if(need_buf) {
-                if((p == num_candi + num_evict - num_need_buf) || (p == remain_evict)) {
-                    break;
-                }
-            }
-
-            storage.chip_arr[*way][*chnl].data_blk[*blk].page_arr[p] = evict_list[i];
-
-            disk_write_cnt++;
-        }
-
-        symbol_resymbolize(*pbn, *chip, *way, *chnl, *blk, num_candi, remain_evict);
-
-        if(need_buf == true) {
-            buf_sz = block_buffer[*chip][*blk].buf_sz;
-
-            for(int i=buf_sz, j=0; i<buf_sz+num_need_buf; i++, j++) {
-                if(i == BUF_SZ) {
-                    int lpa_start = (*ppn) * BUF_SZ;
-
-                    if(lpa_start == PAGE_PER_BLOCK) {
-                        bloom_gc(pbn, chip, way, chnl, blk, ppn, NULL, 0);
-
-                        lpa_start = (*ppn) * BUF_SZ;
-                    }
-
-                    for(int k=0; k<BUF_SZ; k++) {
-                        if(lpa_start + k != 0) {
-                            hashkey = hashing_key(block_buffer[*chip][*blk].lpa[k]);
-                            symbol_set(bf_man->bits_per_pg[*chip][*blk][lpa_start + k], lpa_start + k, hashkey + lpa_start + k, \
-                                    global_symb.symbol[*chip][*blk], st_man->sym_start, st_man->sym_bits_pg, false);
-
-                            sblk_man->num_bf[*pbn]++;
-                        }
-
-                        storage.chip_arr[*way][*chnl].data_blk[*blk].page_arr[lpa_start + k].page = block_buffer[*chip][*blk].value[k];
-                        storage.chip_arr[*way][*chnl].data_blk[*blk].page_arr[lpa_start + k].oob = block_buffer[*chip][*blk].lpa[k];
-
-                        global_symb.ppa_flag[*pbn][lpa_start + k] = 1;
-
-                        disk_write_cnt++;
-                    }
-
-                    storage.chip_arr[*way][*chnl].data_blk[*blk].empty++;
-                    buf_sz = block_buffer[*chip][*blk].buf_sz = 0;
-                }
-                
-                block_buffer[*chip][*blk].lpa[(i % BUF_SZ)] = evict_list[num_evict-num_need_buf+j].oob;
-                block_buffer[*chip][*blk].value[(i % BUF_SZ)] = evict_list[num_evict-num_need_buf+j].page;
-                block_buffer[*chip][*blk].buf_sz++;
-            }
-        }
-    }
-
     free(evict_list);
     free(candi_list);
 }
 
-// 16K buffered write with Reblooming
+// 8K no-buffered write with Reblooming
 void bloom_write(uint32_t lpa, uint32_t value, char* pttr) {
     uint32_t pbn, hashkey;
     int chip, way, chnl, blk, ppn;
-    int lpa_start, buf_sz, cur_num_bf;
+    int lpa_start, new_bf_idx;
     Page prev_page;
 
     pbn = lpa >> mask; // random write
-    //pbn = ((lpa >> 2) & mask);
     chip = pbn / BLOCK_PER_CHIP;
     way = chip / CHANNEL;
     chnl = chip % CHANNEL;
@@ -889,21 +711,19 @@ void bloom_write(uint32_t lpa, uint32_t value, char* pttr) {
     
     ppn = storage.chip_arr[way][chnl].data_blk[blk].empty;
     
-    if(ppn >= BLOCK_PPN) {
-
-//        printf("\nBefore GC in block %u (# of valid BFs: %d)\n", pbn, sblk_man->num_bf[pbn]);
-/**
+    if(ppn >= PAGE_PER_BLOCK) {
+        printf("\nBefore GC in block %u (# of valid BFs: %d)\n", pbn, sblk_man->num_bf[pbn]);
         printf("ppn\tppa\twrite_lpa\tppa_flag(BF exists)\tlpa_flag(lpa exists)\tlpa_list\n");
         for(int p=0; p<PAGE_PER_BLOCK; p++) {
-            printf("%d\t%d\t\t%u\t\t\t", p/BUF_SZ, p, storage.chip_arr[way][chnl].data_blk[blk].page_arr[p].oob);
+            printf("%d\t%d\t\t%u\t\t\t", p, p, storage.chip_arr[way][chnl].data_blk[blk].page_arr[p].oob);
             printf("%d\t\t\t\t\t%d\t\t\t%u\n", global_symb.ppa_flag[pbn][p], global_symb.lpa_flag[pbn][p], pbn*PAGE_PER_BLOCK+p);
         }
         printf("\n");
-**/
 
         bloom_gc(&pbn, &chip, &way, &chnl, &blk, &ppn, NULL, 0);
+        ppn = storage.chip_arr[way][chnl].data_blk[blk].empty;
 
-/**        printf("\nAfter GC in block %u (# of valid BFs: %d)\n", pbn, sblk_man->num_bf[pbn]);
+        printf("\nAfter GC in block %u (# of valid BFs: %d)\n", pbn, sblk_man->num_bf[pbn]);
         uint64_t sumbit = 0;
         uint64_t targetsize = 0;
         for(int bf=0; bf<sblk_man->num_bf[pbn]; bf++) {
@@ -916,9 +736,258 @@ void bloom_write(uint32_t lpa, uint32_t value, char* pttr) {
         }
         printf("Sum of rebloomed ST bits in one block: [%lu bits, %lu bytes]", sumbit, targetsize);
         printf(" (%.2lf%% of PFTL)\n", (double)sumbit/PFTL*100);
-**/
 
-/**
+        printf("ppn\tppa\twrite_lpa\tppa_flag(BF exists)\tlpa_flag(lpa exists)\tlpa_list\n");
+        int sum_ppa_flag=0;
+        for(int p=0; p<PAGE_PER_BLOCK; p++) {
+            printf("%d\t%d\t\t%u\t\t\t", p, p, storage.chip_arr[way][chnl].data_blk[blk].page_arr[p].oob);
+            printf("%d\t\t\t\t\t%d\t\t\t%u\n", global_symb.ppa_flag[pbn][p], global_symb.lpa_flag[pbn][p], pbn*PAGE_PER_BLOCK+p);
+            if(global_symb.ppa_flag[pbn][p] == 1) {
+                sum_ppa_flag++;
+            }
+        }
+        printf("\n");
+        printf("GC result: # of BF: %d\n", sum_ppa_flag);
+        uint64_t bfsum = 0;
+        for(int p=0; p<sblk_man->num_bf[pbn]; p++) {
+            bfsum += st_man->sym_bits_pg[p];
+        }
+        bfsum += (2 * PAGE_PER_BLOCK);
+        //uint64_t targetsize = bfsum / 8;
+        targetsize = bfsum / 8;
+        if(bfsum % 8) {
+            targetsize++;
+        }
+        printf("Sum of ST bits after GC in one block: [%lu bits, %lu bytes]", bfsum, targetsize);
+        printf(" (%.2lf%% of PFTL)\n", (double)bfsum/PFTL*100);
+        printf("\n");
+    }
+
+    // The number of valid BFs in one superblock exceeds 50%
+    if(sblk_man->num_bf[pbn] >= REBLOOM) {
+        printf("\nBefore REBLOOMING in block %u (# of valid BFs: %d)\n", pbn, sblk_man->num_bf[pbn]);
+        printf("ppn\tppa\twrite_lpa\tppa_flag(BF exists)\tlpa_flag(lpa exists)\tlpa_list\n");
+        for(int p=0; p<PAGE_PER_BLOCK; p++) {
+            printf("%d\t%d\t\t%u\t\t\t", p, p, storage.chip_arr[way][chnl].data_blk[blk].page_arr[p].oob);
+            printf("%d\t\t\t\t\t%d\t\t\t%u\n", global_symb.ppa_flag[pbn][p], global_symb.lpa_flag[pbn][p], pbn*PAGE_PER_BLOCK+p);
+        }
+        printf("\n");
+        fflush(stdout);
+
+        bloom_rebloom(&pbn, &chip, &way, &chnl, &blk, &ppn);
+        ppn = storage.chip_arr[way][chnl].data_blk[blk].empty;
+
+        printf("\nAfter REBLOOMING in block %u (# of valid BFs: %d)\n", pbn, sblk_man->num_bf[pbn]);
+        printf("ppn\tppa\twrite_lpa\tppa_flag(BF exists)\tlpa_flag(lpa exists)\tlpa_list\n");
+        int sum_ppa_flag=0;
+        for(int p=0; p<PAGE_PER_BLOCK; p++) {
+            printf("%d\t%d\t\t%u\t\t\t", p, p, storage.chip_arr[way][chnl].data_blk[blk].page_arr[p].oob);
+            printf("%d\t\t\t\t\t%d\t\t\t%u\n", global_symb.ppa_flag[pbn][p], global_symb.lpa_flag[pbn][p], pbn*PAGE_PER_BLOCK+p);
+            if(global_symb.ppa_flag[pbn][p] == 1) {
+                sum_ppa_flag++;
+            }
+        }
+
+        printf("Reblooming result: # of BF: %d\n", sum_ppa_flag);
+        uint64_t bfsum = 0;
+        for(int p=0; p<sblk_man->num_bf[pbn]; p++) {
+            bfsum += st_man->sym_bits_pg[p];
+        }
+        bfsum += (2 * PAGE_PER_BLOCK);
+        uint64_t targetsize = bfsum / 8;
+        if(bfsum % 8) {
+            targetsize++;
+        }
+        printf("Sum of ST bits after reblooming in one block: [%lu bits, %lu bytes]", bfsum, targetsize);
+        printf(" (%.2lf%% of PFTL)\n", (double)bfsum/PFTL*100);
+        printf("\n");
+        fflush(stdout);
+    }
+
+    lpa_start = ppn;
+    new_bf_idx = sblk_man->num_bf[pbn] + 1;
+    bool create_new_bf = false;
+
+    storage.chip_arr[way][chnl].data_blk[blk].page_arr[lpa_start].oob = lpa;
+    storage.chip_arr[way][chnl].data_blk[blk].page_arr[lpa_start].page = value;
+    write_cnt++;
+    disk_write_cnt++;
+
+    global_symb.lpa_flag[pbn][lpa % PAGE_PER_BLOCK] = 1;
+   
+    if(lpa_start != 0) {
+        // TODO: how to synchronize BF's start? 0 or 1?
+        if(storage.chip_arr[way][chnl].data_blk[blk].page_arr[lpa_start - 1].oob + 1 == lpa) {
+            global_symb.ppa_flag[pbn][lpa_start] = 0;
+        }
+        else {
+            create_new_bf = true;
+        }
+    }
+
+    if(create_new_bf == true) {
+        hashkey = hashing_key(lpa);
+printf("chip: %d\tblk: %d\tnew_bf_idx: %d\n", chip, blk, new_bf_idx);
+        symbol_set(bf_man->bits_per_pg[chip][blk][new_bf_idx], new_bf_idx, \
+                hashkey + new_bf_idx, global_symb.symbol[chip][blk], \
+                st_man->sym_start, st_man->sym_bits_pg, false);
+        //printf("write_lpa: %u\tnew_bf_idx: %d\n", lpa, new_bf_idx);
+
+        sblk_man->num_bf[pbn]++;
+        global_symb.ppa_flag[pbn][lpa_start] = 1;
+    }
+
+    storage.chip_arr[way][chnl].data_blk[blk].empty++;
+}
+
+// 8K no-buffered write with Reblooming
+void bloom_read(uint32_t lpa) {
+    uint32_t pbn, hashkey;
+    int chip, way, chnl, blk, ppn;
+    struct timeval strt, end;
+    int max_seq_cnt = 0;
+    
+    pbn = lpa >> mask;
+    chip = pbn / BLOCK_PER_CHIP;
+    way = chip / CHANNEL;
+    chnl = chip % CHANNEL;
+    blk = pbn % BLOCK_PER_CHIP;
+
+    ppn = storage.chip_arr[way][chnl].data_blk[blk].empty;
+
+    int new_bf_idx = sblk_man->num_bf[pbn];
+    bool rb_or_gc = (new_bf_idx == ppn) ? false : true;
+
+printf("\nREAD LPA: %u\n", lpa);
+
+    if(rb_or_gc == true) { // Sequential lpa binding
+        int lpa_locate = lpa % PAGE_PER_BLOCK;
+
+        // Get sequential possible delta first
+        if(lpa_locate != 0) {
+            for(int i=lpa_locate-1; i>=0; i--) {
+                if(global_symb.lpa_flag[pbn][i] == 0) {
+                    break;
+                }
+                else {
+                    max_seq_cnt++;
+                }
+            }
+        }
+
+printf("max_seq_cnt: %d\n", max_seq_cnt);
+fflush(stdout);
+
+        int seq_cnt = 0;
+        for(int idx=ppn-1, j=new_bf_idx; idx>0; idx--) {
+            if(global_symb.ppa_flag[pbn][idx] == 1) {
+                for(int delta=0; delta<=max_seq_cnt; delta++) {
+                    hashkey = hashing_key(lpa - delta);
+
+printf("symbol checking lpa %u in new_bf_idx %d (idx %d)\n", lpa-delta, j, idx);
+printf("seq_cnt: %d\n\n", seq_cnt);
+fflush(stdout);
+
+                    if(symbol_check(bf_man->bits_per_pg[chip][blk][j], j, hashkey + j, \
+                                global_symb.symbol[chip][blk], st_man->sym_start, \
+                                st_man->sym_bits_pg) == true) {
+                        if(storage.chip_arr[way][chnl].data_blk[blk].page_arr[idx].oob ==
+                                (lpa - delta)) {
+                            found_cnt++;
+                            return;
+                        }
+                        else {
+                            notfound_cnt++;
+                        }
+                    }
+                    else {
+                        false_cnt++;
+                    }
+                }
+
+                seq_cnt = 0;
+                j--;
+            }
+            else {
+                seq_cnt++;
+            }
+
+            read_loop++;
+        }
+    }
+    else { // General case of bloom_read (no sequential lpa binding)
+        hashkey = hashing_key(lpa);
+
+        for(int idx=ppn-1; idx>0; idx--) {
+            if(symbol_check(bf_man->bits_per_pg[chip][blk][idx], idx, hashkey + idx, \
+                        global_symb.symbol[chip][blk], st_man->sym_start, st_man->sym_bits_pg) == true) {
+                if(storage.chip_arr[way][chnl].data_blk[blk].page_arr[idx].oob == lpa) {
+                    found_cnt++;
+                    return;
+                }
+                else {
+                    notfound_cnt++;
+                }
+            }
+            else {
+                false_cnt++;
+            }
+
+            read_loop++;
+        }
+    }
+    
+    // Case of page offset 0
+    if(storage.chip_arr[way][chnl].data_blk[blk].page_arr[0+max_seq_cnt].oob != lpa) {
+        printf("This should not happen !!\n");
+        printf("LPA: %u (Until now, # of found: %d)\n", lpa, found_cnt);
+        exit(1);
+    }
+    else {
+        found_cnt++;
+    }
+}
+
+/* 16K buffered write with Reblooming
+void bloom_write(uint32_t lpa, uint32_t value, char* pttr) {
+    uint32_t pbn, hashkey;
+    int chip, way, chnl, blk, ppn;
+    int lpa_start, buf_sz, cur_num_bf;
+    Page prev_page;
+
+    pbn = lpa >> mask; // random write
+    chip = pbn / BLOCK_PER_CHIP;
+    way = chip / CHANNEL;
+    chnl = chip % CHANNEL;
+    blk = pbn % BLOCK_PER_CHIP;
+    
+    ppn = storage.chip_arr[way][chnl].data_blk[blk].empty;
+    
+    if(ppn >= BLOCK_PPN) {
+        printf("\nBefore GC in block %u (# of valid BFs: %d)\n", pbn, sblk_man->num_bf[pbn]);
+        printf("ppn\tppa\twrite_lpa\tppa_flag(BF exists)\tlpa_flag(lpa exists)\tlpa_list\n");
+        for(int p=0; p<PAGE_PER_BLOCK; p++) {
+            printf("%d\t%d\t\t%u\t\t\t", p/BUF_SZ, p, storage.chip_arr[way][chnl].data_blk[blk].page_arr[p].oob);
+            printf("%d\t\t\t\t\t%d\t\t\t%u\n", global_symb.ppa_flag[pbn][p], global_symb.lpa_flag[pbn][p], pbn*PAGE_PER_BLOCK+p);
+        }
+        printf("\n");
+
+        bloom_gc(&pbn, &chip, &way, &chnl, &blk, &ppn, NULL, 0);
+
+        printf("\nAfter GC in block %u (# of valid BFs: %d)\n", pbn, sblk_man->num_bf[pbn]);
+        uint64_t sumbit = 0;
+        uint64_t targetsize = 0;
+        for(int bf=0; bf<sblk_man->num_bf[pbn]; bf++) {
+            sumbit += st_man->sym_bits_pg[bf];
+        }
+        sumbit += (2 * PAGE_PER_BLOCK);
+        targetsize = sumbit / 8;
+        if(sumbit % 8) {
+            targetsize++;
+        }
+        printf("Sum of rebloomed ST bits in one block: [%lu bits, %lu bytes]", sumbit, targetsize);
+        printf(" (%.2lf%% of PFTL)\n", (double)sumbit/PFTL*100);
+
         printf("ppn\tppa\twrite_lpa\tppa_flag(BF exists)\tlpa_flag(lpa exists)\tlpa_list\n");
         int sum_ppa_flag=0;
         for(int p=0; p<PAGE_PER_BLOCK; p++) {
@@ -943,30 +1012,22 @@ void bloom_write(uint32_t lpa, uint32_t value, char* pttr) {
         printf("Sum of ST bits after GC in one block: [%lu bits, %lu bytes]", bfsum, targetsize);
         printf(" (%.2lf%% of PFTL)\n", (double)bfsum/PFTL*100);
         printf("\n");
-**/
-
     }
 
     // The number of valid BFs in one superblock exceeds 50%
     if(sblk_man->num_bf[pbn] >= REBLOOM) {
-
-
-//        printf("\nBefore REBLOOMING in block %u (# of valid BFs: %d)\n", pbn, sblk_man->num_bf[pbn]);
-/**
+        printf("\nBefore REBLOOMING in block %u (# of valid BFs: %d)\n", pbn, sblk_man->num_bf[pbn]);
         printf("ppn\tppa\twrite_lpa\tppa_flag(BF exists)\tlpa_flag(lpa exists)\tlpa_list\n");
         for(int p=0; p<PAGE_PER_BLOCK; p++) {
             printf("%d\t%d\t\t%u\t\t\t", p/BUF_SZ, p, storage.chip_arr[way][chnl].data_blk[blk].page_arr[p].oob);
             printf("%d\t\t\t\t\t%d\t\t\t%u\n", global_symb.ppa_flag[pbn][p], global_symb.lpa_flag[pbn][p], pbn*PAGE_PER_BLOCK+p);
         }
         printf("\n");
-**/
 
         bloom_rebloom(&pbn, &chip, &way, &chnl, &blk, &ppn);
-
         ppn = storage.chip_arr[way][chnl].data_blk[blk].empty;
 
-//        printf("\nAfter REBLOOMING in block %u (# of valid BFs: %d)\n", pbn, sblk_man->num_bf[pbn]);
-/**
+        printf("\nAfter REBLOOMING in block %u (# of valid BFs: %d)\n", pbn, sblk_man->num_bf[pbn]);
         printf("ppn\tppa\twrite_lpa\tppa_flag(BF exists)\tlpa_flag(lpa exists)\tlpa_list\n");
         int sum_ppa_flag=0;
         for(int p=0; p<PAGE_PER_BLOCK; p++) {
@@ -976,6 +1037,7 @@ void bloom_write(uint32_t lpa, uint32_t value, char* pttr) {
                 sum_ppa_flag++;
             }
         }
+
         printf("Reblooming result: # of BF: %d\n", sum_ppa_flag);
         uint64_t bfsum = 0;
         for(int p=0; p<sblk_man->num_bf[pbn]; p++) {
@@ -989,8 +1051,6 @@ void bloom_write(uint32_t lpa, uint32_t value, char* pttr) {
         printf("Sum of ST bits after reblooming in one block: [%lu bits, %lu bytes]", bfsum, targetsize);
         printf(" (%.2lf%% of PFTL)\n", (double)bfsum/PFTL*100);
         printf("\n");
-**/
-
     }
     
     buf_sz = block_buffer[chip][blk].buf_sz;
@@ -1044,8 +1104,9 @@ prev_page.oob = block_buffer[chip][blk].lpa[i];
         write_cnt += BUF_SZ;
     }
 }
+*/
 
-// 16K buffered write with Reblooming
+/* 16K buffered write with Reblooming
 void bloom_read(uint32_t lpa) {
     uint32_t pbn, hashkey;
     int chip, way, chnl, blk, ppn;
@@ -1144,6 +1205,7 @@ printf("until now found_cnt: %d)\n", found_cnt);
         found_cnt++;
     }
 }
+*/
 
 void symbol_init() {
     // Allocate SManager
@@ -1414,15 +1476,10 @@ int main(int argc, char** argv) {
 
     // Generate lpa list
     // Options: W_UNIQUE | R_UNIQUE | R_RD_ORDER | R_RD_GEN
-    //op = R_RD_GEN;
+    op = R_RD_GEN;
     //op = W_UNIQUE | R_UNIQUE;
-    //make_test_set(write_arr, read_arr, argv[1], argv[2], op, DATA_SET);
+    make_test_set(write_arr, read_arr, argv[1], argv[2], op, DATA_SET);
 
-    FILE* fp = fopen(argv[1], "r");
-    while(fgets(buf, 512, fp) != NULL) {
-        //
-    }
-/*
     val = 0;
     while(try_wr--) {
         lpa = write_arr[val];
@@ -1434,22 +1491,21 @@ int main(int argc, char** argv) {
 
         val++;
     }
-*/
 
-/*
+/**/
 printf("\nWRITE DONE\n");
-printf("idx\twrite_lpa\tppa_flag(BF)\tlpa_flag(lpa)\tlpa\tbf_idx\n");
 for(int way=0; way<WAY; way++) {
     for(int chnl=0; chnl<CHANNEL; chnl++) {
         for(int blk=0; blk<BLOCK_PER_CHIP; blk++) {
             int sum_ppa_flag=0;
-            printf("block %d\n", (way*CHANNEL+chnl)*BLOCK_PER_CHIP);
+            printf("[Block %d]\n", (way*CHANNEL+chnl)*BLOCK_PER_CHIP);
+            printf("idx\twrite_lpa\tppa_flag(BF)\tlpa_flag\tlpa\t\tbf_idx\n");
             int pbn = (way*CHANNEL+chnl)*BLOCK_PER_CHIP;
 
             for(int p=0; p<PAGE_PER_BLOCK; p++) {
                 printf("%d\t\t%u\t\t\t", p, \
                         storage.chip_arr[way][chnl].data_blk[blk].page_arr[p].oob);
-                printf("%d\t\t\t\t%u\t\t\t%u\t", global_symb.ppa_flag[pbn][p], global_symb.lpa_flag[pbn][p], pbn*PAGE_PER_BLOCK+p);
+                printf("%d\t\t\t\t%u\t\t%u\t\t\t", global_symb.ppa_flag[pbn][p], global_symb.lpa_flag[pbn][p], pbn*PAGE_PER_BLOCK+p);
                 if(global_symb.ppa_flag[pbn][p] == 1) {
                     sum_ppa_flag++;
                     printf("%d\n", sum_ppa_flag);
@@ -1461,12 +1517,11 @@ for(int way=0; way<WAY; way++) {
         }
     }
 }
-*/
-
-/*
+/**/
+    
     val = 0;
     while(try_rd--) {
-//        lpa = read_arr[val];
+        lpa = read_arr[val];
 
         gettimeofday(&strt, NULL);
         bloom_read(lpa);
@@ -1477,7 +1532,6 @@ for(int way=0; way<WAY; way++) {
     }
     
     print_stats(argv[1], argv[2]);
-*/
 
     free(read_arr);
     free(write_arr);
