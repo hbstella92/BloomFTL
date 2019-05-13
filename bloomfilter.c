@@ -241,8 +241,8 @@ void symbol_set(uint64_t bf_bits, int idx, KEYT key, uint8_t* symbol, uint64_t* 
 	int chunk_cnt = 0;
 	uint8_t chunk_sz = end_bit + 1;
 	KEYT h;
-
-	h = hashfunction((key << 19)) % bf_bits;
+    
+    h = hashfunction((key << 19)) % bf_bits;
 
 	if(remain_chunk - chunk_sz <= 0){
 		chunk_sz = sym_length[idx];
@@ -256,12 +256,14 @@ void symbol_set(uint64_t bf_bits, int idx, KEYT key, uint8_t* symbol, uint64_t* 
 	else{
 		symbol[end_byte] |= h & ((1 << chunk_sz) - 1);
 	}
-	chunk_cnt++;
+	
+    chunk_cnt++;
 	if(chunk_cnt == symb_arr_sz){
 	    goto task_end;
 	    //return;
     }
-	h >>= chunk_sz;
+	
+    h >>= chunk_sz;
 	chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
 
 	// 2
@@ -273,7 +275,8 @@ void symbol_set(uint64_t bf_bits, int idx, KEYT key, uint8_t* symbol, uint64_t* 
 	    goto task_end;
 	    //return;
 	}
-	h >>= chunk_sz;
+	
+    h >>= chunk_sz;
 	chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
 
 	// 3
