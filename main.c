@@ -13,7 +13,7 @@
 
 #define BLK 0
 #define SUPERBLK 1
-#define DEBUG 1
+#define DEBUG 0
 
 #define OP 0.07
 #define GC_TEST 0
@@ -49,7 +49,7 @@
 #define PAGE_PER_SUPERBLK ((PAGE_PER_BLOCK)*(SUPERBLK_SZ))
 #define TOTAL_SUPERBLK ((TOTAL_BLOCK)/(SUPERBLK_SZ))
 #if SUPERBLK
-#define TOTAL_PAGE ((TOTAL_SUPERBLK)*(PAGE_PER_SUPERBLK))
+#define TOTAL_PAGE (int)((TOTAL_SUPERBLK)*(int)((PAGE_PER_SUPERBLK)*(1 - OP)))
 #define LP_SZ (8*(K))
 #define CAPACITY ((LP_SZ)*(TOTAL_PAGE))
 #define PFTL ((PAGE_PER_SUPERBLK)*32)
@@ -171,8 +171,7 @@ void bloom_init() {
 #if BLK
     mask = (int)(log(PAGE_PER_BLOCK) / log(2));
 #elif SUPERBLK
-    mask = (int)(log(PAGE_PER_SUPERBLK) / log(2));
-    //mask = (int)(PAGE_PER_SUPERBLK*(1 - OP));
+    mask = (int)(PAGE_PER_SUPERBLK*(1 - OP));
 #endif
 
     // Alloc && Initialize SBlkManager
@@ -450,8 +449,7 @@ void make_test_set(uint32_t *w_arr, uint32_t *r_arr, char *w_t, char *r_t, uint8
 
         while(make_cnt < test_size) {
             lpa = rand() % TOTAL_PAGE;
-            //pbn = lpa / mask; // random write
-            pbn = lpa >> mask; // random write
+            pbn = lpa / mask; // random write
 
             if(page_usage[pbn] == PAGE_PER_BLOCK) {
                 continue;
@@ -769,37 +767,6 @@ void bloom_gc(uint32_t* pbn, int* chip, int* way, int* chnl, int* blk, int* ppn,
         memset(valid_list, 0, sizeof(Page) * PAGE_PER_BLOCK);
 
         // Copy valid pages in evict block
-/*
-        for(int p=0; p<PAGE_PER_BLOCK; p++) {
-            bool is_valid = true;
-
-            if(global_symb.ppa_flag[superblk][p] == 0) {
-                if(p != 0) {
-                    if(storage.chip_arr[*way][*chnl].data_blk[*sb][0].page_arr[p-1].oob + 1 !=
-                            storage.chip_arr[*way][*chnl].data_blk[*sb][0].page_arr[p].oob) {
-                        is_valid = false;
-                        break;
-                    }
-                }
-            }
-
-            for(int b=SUPERBLK_SZ-1; b>0; b--) {
-                for(int i=0; i<PAGE_PER_BLOCK; i++) {
-                    if(storage.chip_arr[*way][*chnl].data_blk[*sb][0].page_arr[p].oob ==
-                            storage.chip_arr[*way][*chnl].data_blk[*sb][b].page_arr[i].oob) {
-                        is_valid = false;
-                        break;
-                    }
-                }
-            }
-
-            if(is_valid == true) {
-                candi_list[num_candi++] = storage.chip_arr[*way][*chnl].data_blk[*sb][0].page_arr[p];
-            }
-        }
-*/
-
-/**/
         for(int i=PAGE_PER_BLOCK-1; i>=0; i--) {
             bool is_valid = true;
 
@@ -821,7 +788,7 @@ void bloom_gc(uint32_t* pbn, int* chip, int* way, int* chnl, int* blk, int* ppn,
                 candi_list[num_candi++] = storage.chip_arr[*way][*chnl].data_blk[*sb][0].page_arr[i];
             }
         }
-/**/
+        
         qsort(candi_list, num_candi, sizeof(Page), lpa_compare);
 
         // Remove duplicate
@@ -844,10 +811,7 @@ void bloom_gc(uint32_t* pbn, int* chip, int* way, int* chnl, int* blk, int* ppn,
 
         storage.chip_arr[*way][*chnl].data_blk[*sb][0].page_arr = (Page*)malloc(sizeof(Page) * PAGE_PER_BLOCK);
 
-        for(int p=0; p<PAGE_PER_BLOCK; p++) {
-            storage.chip_arr[*way][*chnl].data_blk[*sb][0].page_arr[p].page = 
-                storage.chip_arr[*way][*chnl].data_blk[*sb][0].page_arr[p].oob = 99999;
-        }
+        memset(storage.chip_arr[*way][*chnl].data_blk[*sb][0].page_arr, 0, sizeof(Page) * PAGE_PER_BLOCK);
         storage.chip_arr[*way][*chnl].empty[*sb] = (3 * PAGE_PER_BLOCK);
         
         int* tmp_ppa_flag = (int*)malloc(sizeof(int) * PAGE_PER_SUPERBLK);
@@ -923,9 +887,6 @@ void bloom_gc(uint32_t* pbn, int* chip, int* way, int* chnl, int* blk, int* ppn,
                             is_valid = false;
                         }
                     }
-//else {
-//    is_valid = false;
-//}
                 }
 
                 if(is_valid == true) {
@@ -1193,7 +1154,6 @@ void bloom_rebloom(uint32_t* pbn, int* chip, int* way, int* chnl, int* blk, int*
             }
 
             if(gidx == num_candi - 1) {
-            //if((gidx == num_candi - 1) && (b == (*blk))) {
                 break;
             }
         }
@@ -1373,8 +1333,7 @@ void bloom_write(uint32_t lpa, uint32_t value, char* pttr) {
     Page prev_page;
 
 #if BLK
-    //pbn = lpa / mask; // random write
-    pbn = lpa >> mask; // random write
+    pbn = lpa / mask; // random write
     blk = pbn % BLOCK_PER_CHIP;
     
     chip = pbn / BLOCK_PER_CHIP;
@@ -1450,8 +1409,8 @@ void bloom_write(uint32_t lpa, uint32_t value, char* pttr) {
 #elif SUPERBLK
     int sb;
 
-    superblk = lpa >> mask;
-    sb = superblk % 8192;
+    superblk = lpa / mask;
+    sb = superblk % (BLOCK_PER_CHIP / SUPERBLK_SZ);
 
     chip = superblk / SUPERBLK_PER_CHIP;
     way = chip / CHANNEL;
@@ -1484,7 +1443,8 @@ printf("After GC ppn: %d\tblk: %d\tpbn: %d\n\n", ppn, blk, pbn); fflush(stdout);
         debugging(way, chnl, blk, pbn);
 #endif
     }
-/*
+
+/**/
     // RB triggered (# of valid BFs in one superblock exceeds 50%)
     if(sblk_man->num_bf[superblk] >= REBLOOM) {
 #if DEBUG
@@ -1509,7 +1469,8 @@ printf("After RB ppn: %d\tblk: %d\tpbn: %d\n", ppn, blk, pbn); fflush(stdout);
         debugging(way, chnl, blk, pbn);
 #endif
     }
-*/
+/**/
+
     int global_lpa_start = ppn;
     lpa_start = global_lpa_start % PAGE_PER_BLOCK;
     new_bf_idx = sblk_man->num_bf[superblk] + 1;
@@ -1544,7 +1505,7 @@ printf("After RB ppn: %d\tblk: %d\tpbn: %d\n", ppn, blk, pbn); fflush(stdout);
         }
     }
     else {
-        create_new_bf = true;
+//        create_new_bf = true;
     }
 
     if(create_new_bf == true) {
@@ -1572,7 +1533,7 @@ void bloom_read(uint32_t lpa) {
     int max_seq_cnt = 0;
    
 #if BLK
-    pbn = lpa >> mask;
+    pbn = lpa / mask;
     chip = pbn / BLOCK_PER_CHIP;
     way = chip / CHANNEL;
     chnl = chip % CHANNEL;
@@ -2298,16 +2259,17 @@ void print_stats(char* w_type, char* r_type) {
     for(int b=0; b<TOTAL_SUPERBLK; b++) {
         for(int p=0; p<sblk_man->num_bf[b]; p++) {
             sum += st_man->sym_bits_pg[p];
-            sum += (2 * PAGE_PER_SUPERBLK);
         }
+
+        sum += (2 * PAGE_PER_SUPERBLK);
     }
     sum /= TOTAL_SUPERBLK;
     targetsize = sum / 8;
     if(sum % 8) {
         targetsize++;
     }
-//    printf("Average sum of rebloomed ST bits in one block: [%lu bits, %lu bytes]", sum, targetsize);
-//    printf(" (%.2lf%% of PFTL)\n", (double)sum/PFTL*100);
+    printf("Average sum of rebloomed ST bits in one block: [%lu bits, %lu bytes]", sum, targetsize);
+    printf(" (%.2lf%% of PFTL)\n", (double)sum/PFTL*100);
 
     /* TODO: fix it later !
     uint64_t sym_bits_per_chip = 0;
@@ -2455,7 +2417,6 @@ int main(int argc, char** argv) {
         }
     }
 
-#if DEBUG
 printf("\nWRITE DONE\n");
 #if BLK
 for(int way=0; way<WAY; way++) {
@@ -2514,7 +2475,6 @@ for(int way=0; way<WAY; way++) {
 
         printf("Superblock %d (# of valid BFs: %d)\n", sb, sblk_man->num_bf[superblk]);
     } printf("\n");
-#endif
 #endif
 /*
     val = 0;
