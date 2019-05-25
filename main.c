@@ -16,14 +16,14 @@
 #define DEBUG 1
 
 #define OP 0.07
-#define GC_TEST 1
+#define GC_TEST 0
 
 #define CHANNEL 1
 #define WAY 1
 #define CHIP ((CHANNEL)*(WAY))
 
 // block-related
-#define BLOCK_PER_CHIP 1024
+#define BLOCK_PER_CHIP 8192
 #define PAGE_PER_BLOCK 256 // logical unit
 #define TOTAL_BLOCK ((CHIP)*(BLOCK_PER_CHIP))
 #if BLK
@@ -172,7 +172,7 @@ void bloom_init() {
     mask = (int)(log(PAGE_PER_BLOCK) / log(2));
 #elif SUPERBLK
     mask = (int)(log(PAGE_PER_SUPERBLK) / log(2));
-//    mask = (int)(log(PAGE_PER_SUPERBLK*(1 - OP)) / log(2));
+    //mask = (int)(PAGE_PER_SUPERBLK*(1 - OP));
 #endif
 
     // Alloc && Initialize SBlkManager
@@ -450,6 +450,7 @@ void make_test_set(uint32_t *w_arr, uint32_t *r_arr, char *w_t, char *r_t, uint8
 
         while(make_cnt < test_size) {
             lpa = rand() % TOTAL_PAGE;
+            //pbn = lpa / mask; // random write
             pbn = lpa >> mask; // random write
 
             if(page_usage[pbn] == PAGE_PER_BLOCK) {
@@ -1372,6 +1373,7 @@ void bloom_write(uint32_t lpa, uint32_t value, char* pttr) {
     Page prev_page;
 
 #if BLK
+    //pbn = lpa / mask; // random write
     pbn = lpa >> mask; // random write
     blk = pbn % BLOCK_PER_CHIP;
     
@@ -1450,7 +1452,6 @@ void bloom_write(uint32_t lpa, uint32_t value, char* pttr) {
 
     superblk = lpa >> mask;
     sb = superblk % 8192;
-    //sb = superblk % 2;
 
     chip = superblk / SUPERBLK_PER_CHIP;
     way = chip / CHANNEL;
