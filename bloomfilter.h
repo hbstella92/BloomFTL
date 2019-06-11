@@ -1,20 +1,10 @@
-#ifndef __BLOOM_H__
-#define __BLOOM_H__
+#ifndef __BLOOM__
+#define __BLOOM__
 
-#include"settings.h"
-#include"lsm_settings.h"
-#include<stdlib.h>
-#include<stdint.h>
+#include <stdlib.h>
+#include <stdint.h>
 
-typedef struct{
-	uint32_t k;
-	uint64_t m;
-    uint64_t targetsize;
-	int n;
-	float p;
-	char *body;
-    uint64_t start; // Start index of BF
-}BF;
+#include "ftl_setting.h"
 
 static inline KEYT hashfunction(KEYT key){
 	key ^= key >> 15;

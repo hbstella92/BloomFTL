@@ -1,9 +1,13 @@
-#include"bloomfilter.h"
-#include<math.h>
-#include<stdio.h>
-#include<string.h>
-#include<unistd.h>
-#include<sys/time.h>
+#include "ftl_setting.h"
+#include "ftl_data.h"
+#include "bloomfilter.h"
+
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <math.h>
+#include <sys/time.h>
+
 #ifdef __GNUC__
 #define FORCE_INLINE __attribute__((always_inline)) inline
 #else
@@ -54,7 +58,7 @@ BF** bf_init(int entry, int pg_per_blk) {
         sum_bits += res[p]->m;
         res[p]->start = sum_bits - res[p]->m;
     }
-
+    
     uint64_t sum_bytes = sum_bits / 8;
     if(sum_bits % 8) {
         sum_bytes++;
