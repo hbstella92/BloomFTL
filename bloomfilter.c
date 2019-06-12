@@ -1,9 +1,13 @@
-#include"bloomfilter.h"
-#include<math.h>
-#include<stdio.h>
-#include<string.h>
-#include<unistd.h>
-#include<sys/time.h>
+#include "ftl_setting.h"
+#include "ftl_data.h"
+#include "bloomfilter.h"
+
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <math.h>
+#include <sys/time.h>
+
 #ifdef __GNUC__
 #define FORCE_INLINE __attribute__((always_inline)) inline
 #else
@@ -54,7 +58,7 @@ BF** bf_init(int entry, int pg_per_blk) {
         sum_bits += res[p]->m;
         res[p]->start = sum_bits - res[p]->m;
     }
-
+    
     uint64_t sum_bytes = sum_bits / 8;
     if(sum_bits % 8) {
         sum_bytes++;
@@ -180,171 +184,47 @@ BF** bf_init(int entry, int pg_per_blk) {
 }
 */
 
-uint32_t bf_func(BF* input) {
-    return input->k;
+void magic_number_set() {
+    //
 }
 
-BF* bf_cpy(BF *src) {
-	if(src == NULL) return NULL;
-
-	BF* res=(BF*)malloc(sizeof(BF));
-	memcpy(res,src,sizeof(BF));
-	res->body=(char *)malloc(res->targetsize);
-	memcpy(res->body,src->body,res->targetsize);
-	return res;
-}
-
-uint64_t bf_bits(BF* input) {
-    return input->m;
-}
-
-uint64_t bf_bytes(BF* input) {
-    uint64_t bytes = input->m / 8;
-    if(input->m % 8) {
-        bytes++;
-    }
-
-	return bytes;
-}
-
-/*
-int bf_set(BF** input, int idx, KEYT key) {
-	if(input[idx] == NULL) return -1;
-	
-    KEYT h;
-	int block, offset;
-    uint64_t start = input[idx]->start;
-    int global_bf_idx=0;
-    
-    for(uint32_t i=0; i<input[idx]->k; i++){
-		//MurmurHash3_x86_32(&key,sizeof(key),i,&h);
-		h = hashfunction((key << 19) | (i << 7));
-		h %= input[idx]->m;
-        
-        // h to binary and symbolized
-		block = (start + h) / 8;
-		offset = (start + h) % 8;
-        
-        BITSET(&input[0]->body[block], offset);
-        global_bf_idx = 8 * block + offset;
-        //global_bf_idx = 8 * block + (7 - offset);
-	}
-    return global_bf_idx; // return value: global idx of BF
-}
-*/
-
-void symbol_set(uint64_t bf_bits, int idx, KEYT key, uint8_t* symbol, uint64_t* sym_start, uint64_t* sym_length, bool seq_flag){
+void symbol_set(uint64_t bf_bits, int idx, KEYT key, uint8_t* symbol, uint64_t* sym_start, uint64_t* sym_length) {
 	int end_byte = (sym_start[idx] + sym_length[idx] - 1) / 8;
 	int end_bit = (sym_start[idx] + sym_length[idx] - 1) % 8;
 	int symb_arr_sz = end_byte - (sym_start[idx] / 8) + 1;
 	int remain_chunk = sym_length[idx];
-	int chunk_cnt = 0;
-	uint8_t chunk_sz = end_bit + 1;
-	KEYT h;
-    
-    h = hashfunction((key << 19)) % bf_bits;
+	uint8_t chunk_sz = sym_length[idx] > end_bit + 1 ? end_bit + 1 : sym_length[idx];
+	KEYT h = hashfunction(key) % bf_bits;
 
-	if(remain_chunk - chunk_sz <= 0){
-		chunk_sz = sym_length[idx];
-	}
-
-    // 1
-	remain_chunk -= chunk_sz;
-	if(end_bit == 7){
+	if(end_bit == 7) {
 		symbol[end_byte] |= h << (8 - chunk_sz);
 	}
-	else{
+	else {
 		symbol[end_byte] |= h & ((1 << chunk_sz) - 1);
 	}
-	
-    chunk_cnt++;
-	if(chunk_cnt == symb_arr_sz){
-	    goto task_end;
-	    //return;
-    }
-	
-    h >>= chunk_sz;
-	chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
 
-	// 2
-	remain_chunk -= chunk_sz;
-	symbol[end_byte - 1] |= h << (8 - chunk_sz);
-
-	chunk_cnt++;
-	if(chunk_cnt == symb_arr_sz){
-	    goto task_end;
-	    //return;
+	if(symb_arr_sz == 1) {
+		goto task_end;
 	}
-	
-    h >>= chunk_sz;
+
+	h >>= chunk_sz;
+	remain_chunk -= chunk_sz;
 	chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
 
-	// 3
+	symbol[end_byte - 1] |= h << (8 - chunk_sz);
+	if(symb_arr_sz == 2) {
+		goto task_end;
+	}
+
+	h >>= chunk_sz;
+	remain_chunk -= chunk_sz;
+	chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
+
 	symbol[end_byte - 2] |= h << (8 - chunk_sz);
 
 task_end:
 	return;
 }
-
-/*
-static inline bool symbol_check(BF** input, int idx, KEYT key, uint8_t* symbol, uint64_t* sym_start, uint64_t* sym_length){
-	int end_byte = (sym_start[idx] + sym_length[idx] - 1) / 8;
-	int end_bit = (sym_start[idx] + sym_length[idx] - 1) % 8;
-	int symb_arr_sz = end_byte - (sym_start[idx] / 8) + 1;
-	int remain_chunk = sym_length[idx];
-	int chunk_cnt = 0;
-	uint8_t chunk_sz = end_bit + 1;
-	KEYT h;
-	
-	h = hashfunction((key << 19)) % input[idx]->m;
-
-	if(remain_chunk - chunk_sz <= 0){
-		chunk_sz = sym_length[idx];
-	}
-
-	// 1
-	remain_chunk -= chunk_sz;
-	if(end_bit == 7){
-		if(((h & ((1 << chunk_sz) - 1)) ^ (symbol[end_byte] >> (8 - chunk_sz)))){
-            goto not_exist;
-		}
-	}
-	else{
-		if((h ^ symbol[end_byte]) & ((1 << chunk_sz) - 1)){
-            goto not_exist;
-		}
-	}
-	chunk_cnt++;
-	if(chunk_cnt == symb_arr_sz){
-        goto exist;
-	}
-	h >>= chunk_sz;
-	chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
-
-	// 2
-	remain_chunk -= chunk_sz;
-	if((h & ((1 << chunk_sz) - 1)) ^ (symbol[end_byte - 1] >> (8 - chunk_sz))){
-        goto not_exist;
-	}
-	chunk_cnt++;
-	if(chunk_cnt == symb_arr_sz){
-        goto exist;
-	}
-	h >>= chunk_sz;
-	chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
-
-	// 3
-	if((h & ((1 << chunk_sz) - 1)) ^ (symbol[end_byte - 2] >> (8 - chunk_sz))){
-        goto not_exist;
-	}
-
-exist:
-    return true;
-
-not_exist:
-    return false;
-}
-*/
 
 bool bf_check(BF** input, int idx, KEYT key) {
 	if(input[idx] == NULL) return false;
@@ -375,6 +255,33 @@ void bf_free(BF** input, int pg_per_blk) {
         free(input[p]);
     }
 	free(input);
+}
+
+uint64_t bf_bits(BF* input) {
+    return input->m;
+}
+
+uint64_t bf_bytes(BF* input) {
+    uint64_t bytes = input->m / 8;
+    if(input->m % 8) {
+        bytes++;
+    }
+
+	return bytes;
+}
+
+uint32_t bf_func(BF* input) {
+    return input->k;
+}
+
+BF* bf_cpy(BF *src) {
+	if(src == NULL) return NULL;
+
+	BF* res=(BF*)malloc(sizeof(BF));
+	memcpy(res,src,sizeof(BF));
+	res->body=(char *)malloc(res->targetsize);
+	memcpy(res->body,src->body,res->targetsize);
+	return res;
 }
 
 /*
