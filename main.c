@@ -1746,81 +1746,74 @@ void print_stats(char* w_type, char* r_type) {
 	uint64_t sum = 0;
 	uint64_t targetsize = 0;
 
-	printf("\nTEST DATASET: %d\n", DATA_SET);
+	printf("\nTEST DATASET: write %d read %d\n", DATA_SET, DATA_SET);
 	printf("TEST TYPE: %s write, %s read\n", w_type, r_type);
-
-	printf("\n### BENCHMARK RESULTS ###\n");
+	
+    printf("\n### BENCHMARK RESULTS - READ ###\n");
 	printf("Total read requests: %d\n", read_cnt);
 	printf("Total found num: %d\n", found_cnt);
 	printf("Total not-found num: %d\n", notfound_cnt);
 	printf("Total false num: %ld\n", false_cnt);
-	printf("RAF: %.2f\n\n", (double)(found_cnt + notfound_cnt) / read_cnt);
-
+	printf("RAF: %.2f\n", (double)(found_cnt + notfound_cnt) / read_cnt);
+	
+    printf("\n### BENCHMARK RESULTS - WRITE ###\n");
 	printf("Total write requests: %d\n", write_cnt);
 	printf("Total number of disk write: %d\n", disk_write_cnt);
 	printf("WAF: %.2f\n", (double)disk_write_cnt / write_cnt);
-	printf("erase_cnt: %d\n", evict_blk_cnt);
+	printf("Total erase count: %d\n", evict_blk_cnt);
 
 	printf("\n### BLOOMFILTER INFO ###\n");
-	printf("Sum of BF assigned bits in all pages in 1 block: ");
-	for(int p=0; p<PAGE_PER_BLOCK; p++) {
+	printf("Sum of BF bits in 1 Superblock: ");
+	for(int p=0; p<PAGE_PER_SBLK; p++) {
 		sum += bf_man->bits_per_pg[p];
 	}
 	targetsize = sum / 8;
 	if(sum % 8) {
 		targetsize++;
 	}
-	printf("[%lu bits, %lu bytes] (%.2lf%% of PFTL)\n", sum, targetsize, (double)sum/PFTL*100);
+	printf("%lu bits, %lu bytes (%.2lf%% of PFTL: BIT UNIT)\n", sum, targetsize, (double)sum/BIT_PFTL*100);
 
-	uint64_t bits_per_chip = 0;
-	printf("Sum of BF assigned bits in all blocks in 1 chip: ");
-	bits_per_chip += (sum * BLOCK_PER_CHIP);
-	targetsize = bits_per_chip / 8;
-	if(bits_per_chip % 8) {
-		targetsize++;
-	}
-	printf("[%lu bits, %lu bytes]\n", bits_per_chip, targetsize);
+	uint64_t bytes_per_chip = 0;
+	printf("Sum of BF bytes in 1 Chip: ");
+	bytes_per_chip += (targetsize * SBLK_PER_CHIP);
+	printf("%lu bytes (%.2lf%% of PFTL: BYTE UNIT)\n", bytes_per_chip, (double)bytes_per_chip/(BYTE_PFTL*SBLK_PER_CHIP)*100);
 
-	uint64_t total_bits = 0;
-	printf("All of BF assigned: ");
-	total_bits += (bits_per_chip * CHIP);
-	targetsize = total_bits / 8;
-	if(total_bits % 8) {
-		targetsize++;
-	}
-	printf("[%lu bits, %lu bytes]\n", total_bits, targetsize);
+	uint64_t total_bytes = 0;
+	printf("Total BF bytes: ");
+	total_bytes += (bytes_per_chip * CHIP);
+	printf("%lu bytes (%.2lf%% of PFTL: BYTE UNIT)\n", total_bytes, (double)total_bytes/(BYTE_PFTL*SBLK_PER_CHIP*CHIP)*100);
 
 	printf("\n### SYMBOL TABLE INFO ###\n");
-	targetsize = st_man->sym_bits_blk / 8;
-	if(st_man->sym_bits_blk % 8) {
+	targetsize = st_man->sym_bits_super_blk / 8;
+	if(st_man->sym_bits_super_blk % 8) {
 		targetsize++;
 	}
-	printf("Sum of ST assigned bits in all pages in 1 block: [%lu bits, %lu bytes]", st_man->sym_bits_blk, targetsize);
-	printf(" (%.2lf%% of PFTL)\n", (double)st_man->sym_bits_blk/PFTL*100);
+	printf("Sum of SYMB bits in 1 Superblock: %lu bits, %lu bytes", st_man->sym_bits_super_blk, targetsize);
+	printf(" (%.2lf%% of PFTL: BIT UNIT)\n", (double)st_man->sym_bits_super_blk/BIT_PFTL*100);
 
 	targetsize = st_man->sym_bits_chip / 8;
 	if(st_man->sym_bits_chip % 8) {
 		targetsize++;
 	}
-	printf("Sum of ST assigned bits in all blocks in 1 chip: [%lu bits, %lu bytes]\n", st_man->sym_bits_chip, targetsize);
-
-	sum = st_man->sym_bits_chip * CHIP;
-	targetsize = sum / 8;
-	if(sum % 8) {
-		targetsize++;
-	}
-	printf("Sum of ST assigned bits in all chips: [%lu bits, %lu bytes]\n", sum, targetsize);
+	printf("Sum of SYMB bytes in 1 Chip: %lu bytes ", targetsize);
+    printf("(%.2lf%% of PFTL: BYTE UNIT)\n", (double)targetsize/(BYTE_PFTL*SBLK_PER_CHIP)*100);
 
 	targetsize = st_man->sym_bits_total / 8;
 	if(st_man->sym_bits_total % 8) {
 		targetsize++;
 	}
-	printf("ALL of ST assigned: %lu bits, %lu bytes\n", st_man->sym_bits_total, targetsize);
+	printf("Total SYMB bytes: %lu bytes ", targetsize);
+    printf("(%.2lf%% of PFTL: BYTE UNIT)\n", (double)targetsize/(BYTE_PFTL*SBLK_PER_CHIP*CHIP)*100);
 
 	sum = 0;
-
 	printf("\n### AFTER REBLOOMING ###\n");
-	for(int p=0; p<sblk_man->num_bf[0]; p++) {
+    printf("Average number of BF: ");
+    for(int b=0; b<TOTAL_SBLK; b++) {
+        sum += sblk_man->num_bf[b];
+    }
+    printf("%ld\n", sum/TOTAL_SBLK);
+
+	for(int p=0; p<=sblk_man->num_bf[0]; p++) {
 		sum += st_man->sym_bits_pg[p];
 	}
 	sum += (2 * PAGE_PER_SBLK);
@@ -1828,35 +1821,37 @@ void print_stats(char* w_type, char* r_type) {
 	if(sum % 8) {
 		targetsize++;
 	}
-	printf("Sum of rebloomed ST bits in one block: [%lu bits, %lu bytes]", sum, targetsize);
-	printf(" (%.2lf%% of PFTL)\n", (double)sum/PFTL*100);
+	printf("Sum of REBLOOMED bits in 1 Superblock: %lu bits, %lu bytes ", sum, targetsize);
+	printf("(%.2lf%% of PFTL: BIT UNIT)\n", (double)sum/BIT_PFTL*100);
+
+    sum = 0;
 
 	sum = 0;
 	for(int b=0; b<TOTAL_SBLK; b++) {
-		for(int p=0; p<sblk_man->num_bf[b]; p++) {
+		for(int p=0; p<=sblk_man->num_bf[b]; p++) {
 			sum += st_man->sym_bits_pg[p];
 		}
 
 		sum += (2 * PAGE_PER_SBLK);
 	}
-	sum /= TOTAL_SBLK;
-	targetsize = sum / 8;
-	if(sum % 8) {
-		targetsize++;
-	}
-	printf("Average sum of rebloomed ST bits in one block: [%lu bits, %lu bytes]", sum, targetsize);
-	printf(" (%.2lf%% of PFTL)\n", (double)sum/PFTL*100);
+    targetsize = sum / 8;
+    if(sum % 8) {
+        targetsize++;
+    }
+    printf("Total REBLOOMED bytes: %lu bytes ", targetsize);
+    printf("(%.2lf%% of PFTL: BYTE UNIT)\n", (double)targetsize/(BYTE_PFTL*SBLK_PER_CHIP*CHIP)*100);
 
-	// Time records
-	printf("\nTotal write time: %.f (us)\n", w_time);
-	printf("Total read time: %.f (us)\n", r_time);
-	printf("Average write time: %f (us)\n", w_time/DATA_SET);
-	printf("Average read time: %f (us)\n", r_time/DATA_SET);
-
+    printf("\n### TIME RECORDS - READ ###\n");
+    printf("Total read time: %.f (us)\n", r_time);
+	printf("Average read time: %f (us) *****\n", r_time/DATA_SET);
 	printf("Total read loop count: %d\n", read_loop);
 	printf("Total read check time: %.f (us)\n", read_check);
 	printf("Read check time per req: %f (us)\n", read_check/DATA_SET);
 	printf("Average read check time: %f (us)\n", read_check/read_loop);
+    
+    printf("\n### TIME RECORDS - WRITE ###\n");
+	printf("Total write time: %.f (us)\n", w_time);
+	printf("Average write time: %f (us)\n", w_time/DATA_SET);
 
 	printf("\nTEST COMPLETE !!\n");
 	fflush(stdout);

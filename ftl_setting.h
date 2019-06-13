@@ -30,7 +30,8 @@
 #define TOTAL_SBLK ((TOTAL_BLOCK)/(SBLK_SZ))
 #define TOTAL_PAGE (int)((TOTAL_SBLK)*(int)((PAGE_PER_SBLK)*(1 - OP)))
 #define LB_SZ (8*(K))
-#define PFTL ((PAGE_PER_SBLK)*32)
+#define BIT_PFTL ((PAGE_PER_SBLK)*32) // per 1 superblk
+#define BYTE_PFTL (((BIT_PFTL)%8) ? (((BIT_PFTL)/8) + 1) : ((BIT_PFTL)/8)) // per 1 superblk
 #define DATA_SET (TOTAL_PAGE)
 
 #if BUFFERED
