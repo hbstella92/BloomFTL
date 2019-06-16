@@ -12,10 +12,6 @@ void bloom_read(uint32_t);
 void bloom_gc(uint32_t *, int *, int *, int *, int *, int *, Page *, int, int *);
 void bloom_rebloom(uint32_t *, int *, int *, int *, int *, int *, int *);
 
-void symbol_init();
-void symbol_destroy();
-void symbol_resymbolize(uint32_t, int, int, int, int, int, int, int);
-
 void print_stats(char *, char *);
 
 static inline uint32_t hashing_key(uint32_t);

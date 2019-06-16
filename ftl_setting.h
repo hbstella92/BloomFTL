@@ -3,14 +3,17 @@
 
 #include <stdint.h>
 
-#define OP 0.07
-
 // Simulation version
-#define DEBUG 0
+#define OP 0.07
+#define DEBUG 1
 #define ARM 0
-#define REBLOOM (int)((PAGE_PER_SBLK)*0.5)
 #define BUFFERED 0
 #define HEAVY_GC 0
+#define PR_SUCCESS 0.9
+
+// RB
+#define REBLOOM (int)((PAGE_PER_SBLK)*0.5)
+#define MAX_RB 4
 
 // FTL
 #define CHANNEL 1
@@ -18,7 +21,7 @@
 #define CHIP ((CHANNEL)*(WAY))
 
 // Block
-#define BLOCK_PER_CHIP 8
+#define BLOCK_PER_CHIP 4
 //#define BLOCK_PER_CHIP 8192
 #define PAGE_PER_BLOCK 256
 #define TOTAL_BLOCK ((CHIP)*(BLOCK_PER_CHIP))

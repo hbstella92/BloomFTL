@@ -48,7 +48,7 @@ typedef struct {
 typedef struct {
 	uint8_t*** symbol;
 
-	int** lba_flag; // TODO: must change to bit array
+	int** lba_flag;
 	int** ppa_flag; // TODO: must change to bit array
 } GlobalSymb;
 

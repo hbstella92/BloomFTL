@@ -44,6 +44,8 @@ int notfound_cnt;
 int evict_blk_cnt;
 int disk_write_cnt;
 
+int rb_cnt;
+
 void bloom_init() {
 	double true_p=0.0, false_p=0.0;
 
@@ -176,55 +178,6 @@ void bloom_destroy() {
 	free(storage.chip_arr);
 }
 
-/* SHA256 by hanbyeol
-   uint32_t hashing_key(uint32_t key) {
-   char* string;
-   Sha256Context ctx;
-   SHA256_HASH hash;
-   uint32_t bytes_arr[8];
-   uint32_t hashkey;
-
-   string = (char*)&key;
-
-   Sha256Initialise(&ctx);
-   Sha256Update(&ctx, (unsigned char*)string, sizeof(uint32_t));
-   Sha256Finalise(&ctx, &hash);
-
-   for(int i=0; i<8; i++) {
-   bytes_arr[i] = ((hash.bytes[i*4] << 24) | (hash.bytes[i*4+1] << 16) | \
-   (hash.bytes[i*4+2] << 8) | (hash.bytes[i*4+3]));
-   }
-
-   hashkey = bytes_arr[0];
-   for(int i=1; i<8; i++) {
-   hashkey ^= bytes_arr[i];
-   }
-
-   return hashkey;
-   }
- */
-
-/* SHA256 by jiho
-   uint32_t hashing_key(uint32_t key) {
-   uint32_t hashkey; 
-   uint32_t state[8];
-
-   sha256_calculate(state, key);
-
-   hashkey = state[0];
-   for(int i=1; i<8; i++) {
-   hashkey ^= state[i];
-   }
-
-   return hashkey;
-   }
- */
-
-// Fibonacci hash
-static inline uint32_t hashing_key(uint32_t key) {
-	return (uint32_t)((0.618033887 * key) * 1024);
-}
-
 int compare(const void *a, const void *b) {
 	uint32_t num1 = *(uint32_t *)a;
 	uint32_t num2 = *(uint32_t *)b;
@@ -352,102 +305,6 @@ int lba_compare(const void* a, const void* b) {
 	else {
 		return 0;
 	}
-}
-
-void symbol_resymbolize(uint32_t pbn, int chip, int way, int chnl, int blk, int valid_start, int num_flush, int sb) {
-	uint32_t hashkey;
-	int superblk = chip * SBLK_PER_CHIP + sb;
-
-	storage.chip_arr[way][chnl].empty[sb] += num_flush;
-
-	free(global_symb.symbol[chip][sb]);
-	sblk_man->num_bf[superblk] = 0;
-
-	global_symb.symbol[chip][sb] = (uint8_t*)malloc(sizeof(uint8_t) * st_man->sym_bytes_total);
-	memset(global_symb.symbol[chip][sb], 0, sizeof(uint8_t) * st_man->sym_bytes_total);
-
-	int ppa_end_idx = storage.chip_arr[way][chnl].empty[sb];
-	int new_bf_idx = 1;
-
-	// Set new symbol and Set dead bit for LBA and PPA
-	for(int pa=0, b=0; pa<ppa_end_idx, b<SBLK_SZ; pa++) {
-		bool make_new_bf = false;
-
-		int local_pa = pa % PAGE_PER_BLOCK;
-
-		if(pa < valid_start) {
-			if(global_symb.ppa_flag[superblk][pa] == 1) {
-				make_new_bf = true;
-			}
-		}
-		else if(pa > valid_start) {
-			if(local_pa == 0) {
-				if(storage.chip_arr[way][chnl].data_blk[sb][b-1].page_arr[PAGE_PER_BLOCK-1].oob + 1 ==
-						storage.chip_arr[way][chnl].data_blk[sb][b].page_arr[0].oob) {
-					global_symb.ppa_flag[superblk][pa] = 0;
-				}
-				else {
-					make_new_bf = true;
-				}
-			}
-			else {
-				if(storage.chip_arr[way][chnl].data_blk[sb][b].page_arr[local_pa-1].oob + 1 ==
-						storage.chip_arr[way][chnl].data_blk[sb][b].page_arr[local_pa].oob) {
-					global_symb.ppa_flag[superblk][pa] = 0;
-				}
-				else {
-					make_new_bf = true;
-				}
-			}
-		}
-		else {
-			if(pa != 0) {
-				if(global_symb.ppa_flag[superblk][pa-1] == 1) {
-					if(local_pa == 0) {
-						if(storage.chip_arr[way][chnl].data_blk[sb][b-1].page_arr[PAGE_PER_BLOCK-1].oob + 1 ==
-								storage.chip_arr[way][chnl].data_blk[sb][b].page_arr[0].oob) {
-							global_symb.ppa_flag[superblk][pa] = 0;
-						}
-						else {
-							make_new_bf = true;
-						}
-					}
-					else {
-						if(storage.chip_arr[way][chnl].data_blk[sb][b].page_arr[local_pa-1].oob + 1 == 
-								storage.chip_arr[way][chnl].data_blk[sb][b].page_arr[local_pa].oob) {
-							global_symb.ppa_flag[superblk][pa] = 0;
-						}
-						else {
-							make_new_bf = true;
-						}
-					}
-				}
-				else {
-					make_new_bf = true;
-				}
-			}
-		}
-
-		if(make_new_bf == true && pa != 0) {
-			hashkey = hashing_key(storage.chip_arr[way][chnl].data_blk[sb][b].page_arr[local_pa].oob);
-			symbol_set(bf_man->bits_per_pg[new_bf_idx], new_bf_idx, hashkey + new_bf_idx, \
-					global_symb.symbol[chip][sb], st_man->sym_start, st_man->sym_bits_pg);
-
-			global_symb.ppa_flag[superblk][pa] = 1;
-
-			new_bf_idx++;
-		}
-
-		if(!((pa + 1) % PAGE_PER_BLOCK)) {
-			b++;
-		}
-
-		if(pa + 1 == storage.chip_arr[way][chnl].empty[sb]) {
-			break;
-		}
-	}
-
-	sblk_man->num_bf[superblk] = new_bf_idx - 1;
 }
 
 void bloom_gc_revision(uint32_t* pbn, int* chip, int* way, int* chnl, int* blk, int* ppn, Page* rebloom_list, int num_rebloom, int* sb) {
@@ -1271,7 +1128,7 @@ void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
 	way = chip / CHANNEL;
 	chnl = chip % CHANNEL;
 
-	ppn = storage.chip_arr[way][chnl].empty[sb]; // TODO: global ppn
+	ppn = storage.chip_arr[way][chnl].empty[sb];
 	blk = ppn / PAGE_PER_BLOCK; // in one superblock
 	pbn = sb * SBLK_SZ + blk; // in one chip
 
@@ -1340,6 +1197,7 @@ void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
 		if(lba_start == 0) {
 			if(storage.chip_arr[way][chnl].data_blk[sb][blk-1].page_arr[PAGE_PER_BLOCK-1].oob + 1 == lba) {
 				global_symb.ppa_flag[superblk][global_lba_start] = 0;
+                rb_cnt++;
 			}
 			else {
 				create_new_bf = true;
@@ -1348,6 +1206,7 @@ void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
 		else {
 			if(storage.chip_arr[way][chnl].data_blk[sb][blk].page_arr[lba_start - 1].oob + 1 == lba) {
 				global_symb.ppa_flag[superblk][global_lba_start] = 0;
+                rb_cnt++;
 			}
 			else {
 				create_new_bf = true;
@@ -1356,9 +1215,10 @@ void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
 	}
 	else {
         global_symb.ppa_flag[superblk][global_lba_start] = 1;
+        rb_cnt++;
 	}
 
-	if(create_new_bf == true) {
+	if((create_new_bf == true) || (rb_cnt == MAX_RB)) {
 		hashkey = hashing_key(lba);
 		symbol_set(bf_man->bits_per_pg[new_bf_idx], new_bf_idx, \
 				hashkey + new_bf_idx, global_symb.symbol[chip][sb], \
@@ -1366,6 +1226,8 @@ void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
 
 		sblk_man->num_bf[superblk]++;
 		global_symb.ppa_flag[superblk][global_lba_start] = 1;
+
+        rb_cnt = 0;
 	}
 
 	storage.chip_arr[way][chnl].empty[sb]++;
@@ -1464,7 +1326,8 @@ void bloom_read(uint32_t lba) {
         printf("Until now, found cnt: %d (LBA %u delta %d)\n", found_cnt, lba, delta);
         uint32_t startlba = lba;
         for(int i=4; i>0; i--) {
-            printf("lbalist %u\tlba_flag %d\n", startlba - i, global_symb.lba_flag[superblk][(startlba - i) % ((int)(PAGE_PER_SBLK * (1 - OP)))]);
+            printf("lbalist %u\tlba_flag %d\n", startlba - i, \
+                    global_symb.lba_flag[superblk][(startlba - i) % ((int)(PAGE_PER_SBLK * (1 - OP)))]);
         }
         for(int i=0; i<5; i++) {
             printf("lbalist %u\tlba_flag %d\n", startlba + i, global_symb.lba_flag[superblk][(startlba + i) % ((int)(PAGE_PER_SBLK * (1 - OP)))]);
@@ -1518,7 +1381,6 @@ void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
 			prev_page = storage.chip_arr[way][chnl].data_blk[blk].page_arr[lba_start - 1];
 		}
 
-		// TODO: how to synchronize BF's start? 0 or 1?
 		for(int i=0; i<BUF_SZ; i++) {
 			if(lba_start + i != 0) {
 				if(prev_page.oob + 1 == block_buffer[chip][blk].lba[i]) {
@@ -1647,101 +1509,6 @@ void bloom_read(uint32_t lba) {
 }
 #endif
 
-void symbol_init() {
-	// Allocate SManager
-	st_man = (SManager*)malloc(sizeof(SManager));
-	st_man->sym_bits_pg = (uint64_t*)malloc(sizeof(uint64_t) * PAGE_PER_SBLK);
-	st_man->new_pidx_start = (uint64_t*)malloc(sizeof(uint64_t) * TOTAL_SBLK);
-
-	memset(st_man->sym_bits_pg, 0, sizeof(uint64_t) * PAGE_PER_SBLK);
-
-	for(int i=0; i<TOTAL_SBLK; i++) {
-		st_man->new_pidx_start[i] = 0;
-	}
-
-	st_man->sym_bits_total = st_man->dead_bytes_total = 0;
-	st_man->sym_bits_chip = st_man->sym_bits_blk = st_man->sym_bits_super_blk = 0;
-
-	// Allocate symbol delimiter
-	st_man->sym_start = (uint64_t*)malloc(sizeof(uint64_t) * PAGE_PER_SBLK);
-	memset(st_man->sym_start, 0, sizeof(uint64_t) * PAGE_PER_SBLK);
-
-	// Calculate symbol bits
-	uint64_t symbol_bit=0, sum=0;
-
-	for(int p=1; p<PAGE_PER_SBLK; p++) {
-		symbol_bit = bf_man->bits_per_pg[p];
-		symbol_bit = ceil(log(symbol_bit) / log(2));
-
-		if(p == 1){
-			symbol_bit += 4;
-		}
-		st_man->sym_bits_pg[p] = symbol_bit;
-
-		st_man->sym_start[p] = sum;
-		sum += symbol_bit;
-	}
-	
-    st_man->sym_bits_super_blk = sum;
-	st_man->sym_bits_chip = sum * (SBLK_PER_CHIP);
-	st_man->sym_bits_total = st_man->sym_bits_chip * CHIP;
-
-	st_man->sym_bytes_total = sum / 8;
-	if(sum % 8) {
-		st_man->sym_bytes_total++;
-	}
-
-	st_man->dead_bytes_total = PAGE_PER_SBLK / 8;
-
-	// Allocate symbol table
-	global_symb.symbol = (uint8_t***)malloc(sizeof(uint8_t**) * CHIP);
-	memset(global_symb.symbol, 0, sizeof(uint8_t**) * CHIP);
-
-	for(int c=0; c<CHIP; c++) {
-		global_symb.symbol[c] = (uint8_t**)malloc(sizeof(uint8_t*) * SBLK_PER_CHIP);
-		memset(global_symb.symbol[c], 0, sizeof(char*) * SBLK_PER_CHIP);
-
-		for(int sb=0; sb<SBLK_PER_CHIP; sb++) {
-			global_symb.symbol[c][sb] = (uint8_t*)malloc(sizeof(uint8_t) * st_man->sym_bytes_total);
-			memset(global_symb.symbol[c][sb], 0, sizeof(uint8_t) * st_man->sym_bytes_total);
-		}
-	}
-
-	global_symb.lba_flag = (int**)malloc(sizeof(int*) * TOTAL_SBLK);
-	global_symb.ppa_flag = (int**)malloc(sizeof(int*) * TOTAL_SBLK);
-	for(int sb=0; sb<TOTAL_SBLK; sb++) {
-		global_symb.lba_flag[sb] = (int*)malloc(sizeof(int) * PAGE_PER_SBLK);
-		global_symb.ppa_flag[sb] = (int*)malloc(sizeof(int) * PAGE_PER_SBLK);
-
-		memset(global_symb.lba_flag[sb], 0, sizeof(int) * PAGE_PER_SBLK);
-		memset(global_symb.ppa_flag[sb], 0, sizeof(int) * PAGE_PER_SBLK);
-	}
-}
-
-void symbol_destroy() {
-	free(st_man->sym_bits_pg);
-	free(st_man->new_pidx_start);
-	free(st_man->sym_start);
-	free(st_man);
-
-	for(int c=0; c<CHIP; c++) {
-		for(int sb=0; sb<SBLK_PER_CHIP; sb++) {
-			free(global_symb.symbol[c][sb]);
-		}
-
-		free(global_symb.symbol[c]);
-	}
-
-	for(int sb=0; sb<TOTAL_SBLK; sb++) {
-		free(global_symb.lba_flag[sb]);
-		free(global_symb.ppa_flag[sb]);
-	}
-
-	free(global_symb.symbol);
-	free(global_symb.lba_flag);
-	free(global_symb.ppa_flag);
-}
-
 void print_stats(char* w_type, char* r_type) {
 	uint64_t sum = 0;
 	uint64_t targetsize = 0;
@@ -1812,7 +1579,7 @@ void print_stats(char* w_type, char* r_type) {
         sum += sblk_man->num_bf[b];
     }
     printf("%ld\n", sum/TOTAL_SBLK);
-
+/*
 	for(int p=0; p<=sblk_man->num_bf[0]; p++) {
 		sum += st_man->sym_bits_pg[p];
 	}
@@ -1823,7 +1590,7 @@ void print_stats(char* w_type, char* r_type) {
 	}
 	printf("Sum of REBLOOMED bits in 1 Superblock: %lu bits, %lu bytes ", sum, targetsize);
 	printf("(%.2lf%% of PFTL: BIT UNIT)\n", (double)sum/BIT_PFTL*100);
-
+*/
     sum = 0;
 
 	sum = 0;

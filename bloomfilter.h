@@ -5,6 +5,8 @@
 #include <stdint.h>
 
 #include "ftl_setting.h"
+#include "ftl_data.h"
+#include "ftl_func.h"
 
 static inline KEYT hashfunction(KEYT key) {
     key ^= key >> 15;
@@ -16,11 +18,13 @@ static inline KEYT hashfunction(KEYT key) {
     return key;
 }
 
-BF** bf_init(int entry, int pg_per_blk);
-void magic_number_set();
-void symbol_set(uint64_t bf_bits, int idx, KEYT key, uint8_t* symbol, uint64_t* sym_start, uint64_t* sym_length);
+void symbol_init();
+void symbol_destroy();
+void symbol_set(uint64_t bf_bits, int idx, KEYT key, uint8_t* symbol, \
+        uint64_t* sym_start, uint64_t* sym_length);
 
-static inline bool symbol_check(uint64_t bf_bits, KEYT key, uint8_t* symbol, uint64_t sym_start, uint64_t sym_length) {
+static inline bool symbol_check(uint64_t bf_bits, KEYT key, uint8_t* symbol, \
+        uint64_t sym_start, uint64_t sym_length) {
     int end_byte = (sym_start + sym_length - 1) / 8;
     int end_bit = (sym_start + sym_length - 1) % 8;
     int symb_arr_sz = end_byte - (sym_start / 8) + 1;
@@ -74,6 +78,10 @@ not_exist:
     return false;
 }
 
+void symbol_resymbolize(uint32_t pbn, int chip, int way, int chnl, int blk, \
+        int valid_start, int num_flush, int sb);
+
+BF** bf_init(int entry, int pg_per_blk);
 bool bf_check(BF** input, int idx, KEYT key);
 void bf_free(BF** input, int pg_per_blk);
 
@@ -81,8 +89,59 @@ uint64_t bf_bits(BF* input);
 uint64_t bf_bytes(BF* input);
 uint32_t bf_func(BF* input);
 
+// Fibonacci hash
+static inline uint32_t hashing_key(uint32_t key) {
+    return (uint32_t)((0.618033887 * key) * 1024);
+}
+
+/* SHA256 by hanbyeol
+uint32_t hashing_key(uint32_t key) {
+    char* string;
+    Sha256Context ctx;
+    SHA256_HASH hash;
+    uint32_t bytes_arr[8];
+    uint32_t hashkey;
+
+    string = (char*)&key;
+
+    Sha256Initialise(&ctx);
+    Sha256Update(&ctx, (unsigned char*)string, sizeof(uint32_t));
+    Sha256Finalise(&ctx, &hash);
+
+    for(int i=0; i<8; i++) {
+        bytes_arr[i] = ((hash.bytes[i*4] << 24) | (hash.bytes[i*4+1] << 16) | \
+                (hash.bytes[i*4+2] << 8) | (hash.bytes[i*4+3]));
+    }
+
+    hashkey = bytes_arr[0];
+    for(int i=1; i<8; i++) {
+        hashkey ^= bytes_arr[i];
+    }
+
+    return hashkey;
+}
+*/
+
+/* SHA256 by jiho
+uint32_t hashing_key(uint32_t key) {
+    uint32_t hashkey; 
+    uint32_t state[8];
+
+    sha256_calculate(state, key);
+
+    hashkey = state[0];
+    for(int i=1; i<8; i++) {
+        hashkey ^= state[i];
+    }
+
+    return hashkey;
+}
+*/
+
+/*
 BF* bf_cpy(BF*);
 void bf_save(BF*);
 BF* bf_load();
+*/
 
 #endif

@@ -1,12 +1,13 @@
-#include "ftl_setting.h"
-#include "ftl_data.h"
-#include "bloomfilter.h"
-
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <math.h>
 #include <sys/time.h>
+
+//#include "ftl_setting.h"
+//#include "ftl_data.h"
+//#include "ftl_func.h"
+#include "bloomfilter.h"
 
 #ifdef __GNUC__
 #define FORCE_INLINE __attribute__((always_inline)) inline
@@ -14,10 +15,13 @@
 #define FORCE_INLINE inline
 #endif
 
-#define PR_SUCCESS 0.9
-#define NUM_CHUNK 10
-
-extern int save_fd;
+extern SBlkManager* sblk_man;
+extern GlobalBF** global_bf;
+extern BFManager* bf_man;
+extern Storage storage;
+extern GlobalSymb global_symb;
+extern SManager* st_man;
+//extern int save_fd;
 
 static inline void BITSET(char *input, char offset){
     (*input) |= (1 << offset);
@@ -25,6 +29,251 @@ static inline void BITSET(char *input, char offset){
 
 static inline bool BITGET(char input, char offset){
     return input & (1 << offset);
+}
+
+void symbol_init() {
+	// Allocate SManager
+	st_man = (SManager*)malloc(sizeof(SManager));
+	st_man->sym_bits_pg = (uint64_t*)malloc(sizeof(uint64_t) * PAGE_PER_SBLK);
+	st_man->new_pidx_start = (uint64_t*)malloc(sizeof(uint64_t) * TOTAL_SBLK);
+
+	memset(st_man->sym_bits_pg, 0, sizeof(uint64_t) * PAGE_PER_SBLK);
+
+	for(int i=0; i<TOTAL_SBLK; i++) {
+		st_man->new_pidx_start[i] = 0;
+	}
+
+	st_man->sym_bits_total = st_man->dead_bytes_total = 0;
+	st_man->sym_bits_chip = st_man->sym_bits_blk = st_man->sym_bits_super_blk = 0;
+
+	// Allocate symbol delimiter
+	st_man->sym_start = (uint64_t*)malloc(sizeof(uint64_t) * PAGE_PER_SBLK);
+	memset(st_man->sym_start, 0, sizeof(uint64_t) * PAGE_PER_SBLK);
+
+	// Calculate symbol bits
+	uint64_t symbol_bit=0, sum=0;
+
+	for(int p=1; p<PAGE_PER_SBLK; p++) {
+		symbol_bit = bf_man->bits_per_pg[p];
+		symbol_bit = ceil(log(symbol_bit) / log(2));
+
+		if(p == 1){
+			symbol_bit += 4;
+		}
+		st_man->sym_bits_pg[p] = symbol_bit;
+//printf("pidx %d\tSYMB bits %lu\n", p, st_man->sym_bits_pg[p]);
+
+		st_man->sym_start[p] = sum;
+		sum += symbol_bit;
+	}
+//printf("\n");
+	
+    st_man->sym_bits_super_blk = sum;
+	st_man->sym_bits_chip = sum * (SBLK_PER_CHIP);
+	st_man->sym_bits_total = st_man->sym_bits_chip * CHIP;
+
+	st_man->sym_bytes_total = sum / 8;
+	if(sum % 8) {
+		st_man->sym_bytes_total++;
+	}
+
+	st_man->dead_bytes_total = PAGE_PER_SBLK / 8;
+
+	// Allocate symbol table
+	global_symb.symbol = (uint8_t***)malloc(sizeof(uint8_t**) * CHIP);
+	memset(global_symb.symbol, 0, sizeof(uint8_t**) * CHIP);
+
+	for(int c=0; c<CHIP; c++) {
+		global_symb.symbol[c] = (uint8_t**)malloc(sizeof(uint8_t*) * SBLK_PER_CHIP);
+		memset(global_symb.symbol[c], 0, sizeof(char*) * SBLK_PER_CHIP);
+
+		for(int sb=0; sb<SBLK_PER_CHIP; sb++) {
+			global_symb.symbol[c][sb] = (uint8_t*)malloc(sizeof(uint8_t) * st_man->sym_bytes_total);
+			memset(global_symb.symbol[c][sb], 0, sizeof(uint8_t) * st_man->sym_bytes_total);
+		}
+	}
+
+	global_symb.lba_flag = (int**)malloc(sizeof(int*) * TOTAL_SBLK);
+	global_symb.ppa_flag = (int**)malloc(sizeof(int*) * TOTAL_SBLK);
+	for(int sb=0; sb<TOTAL_SBLK; sb++) {
+		global_symb.lba_flag[sb] = (int*)malloc(sizeof(int) * PAGE_PER_SBLK);
+		global_symb.ppa_flag[sb] = (int*)malloc(sizeof(int) * PAGE_PER_SBLK);
+
+		memset(global_symb.lba_flag[sb], 0, sizeof(int) * PAGE_PER_SBLK);
+		memset(global_symb.ppa_flag[sb], 0, sizeof(int) * PAGE_PER_SBLK);
+	}
+}
+
+void symbol_destroy() {
+	free(st_man->sym_bits_pg);
+	free(st_man->new_pidx_start);
+	free(st_man->sym_start);
+	free(st_man);
+
+	for(int c=0; c<CHIP; c++) {
+		for(int sb=0; sb<SBLK_PER_CHIP; sb++) {
+			free(global_symb.symbol[c][sb]);
+		}
+
+		free(global_symb.symbol[c]);
+	}
+
+	for(int sb=0; sb<TOTAL_SBLK; sb++) {
+		free(global_symb.lba_flag[sb]);
+		free(global_symb.ppa_flag[sb]);
+	}
+
+	free(global_symb.symbol);
+	free(global_symb.lba_flag);
+	free(global_symb.ppa_flag);
+}
+
+void symbol_set(uint64_t bf_bits, int idx, KEYT key, uint8_t* symbol, uint64_t* sym_start, uint64_t* sym_length) {
+	int end_byte = (sym_start[idx] + sym_length[idx] - 1) / 8;
+	int end_bit = (sym_start[idx] + sym_length[idx] - 1) % 8;
+	int symb_arr_sz = end_byte - (sym_start[idx] / 8) + 1;
+	int remain_chunk = sym_length[idx];
+	uint8_t chunk_sz = sym_length[idx] > end_bit + 1 ? end_bit + 1 : sym_length[idx];
+	KEYT h = hashfunction(key) % bf_bits;
+    
+    // 1
+	if(end_bit == 7) {
+		symbol[end_byte] |= h << (8 - chunk_sz);
+	}
+	else {
+		symbol[end_byte] |= h & ((1 << chunk_sz) - 1);
+	}
+
+	if(symb_arr_sz == 1) {
+		goto task_end;
+	}
+
+	h >>= chunk_sz;
+	remain_chunk -= chunk_sz;
+	chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
+
+    // 2
+	symbol[end_byte - 1] |= h << (8 - chunk_sz);
+	if(symb_arr_sz == 2) {
+		goto task_end;
+	}
+
+	h >>= chunk_sz;
+	remain_chunk -= chunk_sz;
+	chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
+
+    // 3
+	symbol[end_byte - 2] |= h << (8 - chunk_sz);
+
+task_end:
+	return;
+}
+
+void symbol_resymbolize(uint32_t pbn, int chip, int way, int chnl, int blk, int valid_start, int num_flush, int sb) {
+	uint32_t hashkey;
+	int superblk = chip * SBLK_PER_CHIP + sb;
+
+	storage.chip_arr[way][chnl].empty[sb] += num_flush;
+
+	free(global_symb.symbol[chip][sb]);
+	sblk_man->num_bf[superblk] = 0;
+
+	global_symb.symbol[chip][sb] = (uint8_t*)malloc(sizeof(uint8_t) * st_man->sym_bytes_total);
+	memset(global_symb.symbol[chip][sb], 0, sizeof(uint8_t) * st_man->sym_bytes_total);
+
+	int ppa_end_idx = storage.chip_arr[way][chnl].empty[sb];
+	int new_bf_idx = 1;
+    int rb_chunk = 0;
+
+	// Set new symbol and Set dead bit for LBA and PPA
+	for(int pa=0, b=0; pa<ppa_end_idx, b<SBLK_SZ; pa++) {
+		bool make_new_bf = false;
+
+		int local_pa = pa % PAGE_PER_BLOCK;
+
+		if(pa < valid_start) {
+			if(global_symb.ppa_flag[superblk][pa] == 1) {
+				make_new_bf = true;
+			}
+		}
+		else if(pa > valid_start) {
+			if(local_pa == 0) {
+				if(storage.chip_arr[way][chnl].data_blk[sb][b-1].page_arr[PAGE_PER_BLOCK-1].oob + 1 ==
+						storage.chip_arr[way][chnl].data_blk[sb][b].page_arr[0].oob) {
+					global_symb.ppa_flag[superblk][pa] = 0;
+                    rb_chunk++;
+				}
+				else {
+					make_new_bf = true;
+				}
+			}
+			else {
+				if(storage.chip_arr[way][chnl].data_blk[sb][b].page_arr[local_pa-1].oob + 1 ==
+						storage.chip_arr[way][chnl].data_blk[sb][b].page_arr[local_pa].oob) {
+					global_symb.ppa_flag[superblk][pa] = 0;
+                    rb_chunk++;
+				}
+				else {
+					make_new_bf = true;
+				}
+			}
+		}
+		else {
+			if(pa != 0) {
+				if(global_symb.ppa_flag[superblk][pa-1] == 1) {
+					if(local_pa == 0) {
+						if(storage.chip_arr[way][chnl].data_blk[sb][b-1].page_arr[PAGE_PER_BLOCK-1].oob + 1 ==
+								storage.chip_arr[way][chnl].data_blk[sb][b].page_arr[0].oob) {
+							global_symb.ppa_flag[superblk][pa] = 0;
+                            rb_chunk++;
+						}
+						else {
+							make_new_bf = true;
+						}
+					}
+					else {
+						if(storage.chip_arr[way][chnl].data_blk[sb][b].page_arr[local_pa-1].oob + 1 == 
+								storage.chip_arr[way][chnl].data_blk[sb][b].page_arr[local_pa].oob) {
+							global_symb.ppa_flag[superblk][pa] = 0;
+                            rb_chunk++;
+						}
+						else {
+							make_new_bf = true;
+						}
+					}
+				}
+				else {
+					make_new_bf = true;
+				}
+			}
+		}
+
+        if(rb_chunk == MAX_RB) {
+            make_new_bf = true;
+        }
+
+		if(make_new_bf == true && pa != 0) {
+			hashkey = hashing_key(storage.chip_arr[way][chnl].data_blk[sb][b].page_arr[local_pa].oob);
+			symbol_set(bf_man->bits_per_pg[new_bf_idx], new_bf_idx, hashkey + new_bf_idx, \
+					global_symb.symbol[chip][sb], st_man->sym_start, st_man->sym_bits_pg);
+
+			global_symb.ppa_flag[superblk][pa] = 1;
+
+			new_bf_idx++;
+
+            rb_chunk = 0;
+		}
+
+		if(!((pa + 1) % PAGE_PER_BLOCK)) {
+			b++;
+		}
+
+		if(pa + 1 == storage.chip_arr[way][chnl].empty[sb]) {
+			break;
+		}
+	}
+
+	sblk_man->num_bf[superblk] = new_bf_idx - 1;
 }
 
 // Compressible bf_init (# of hash func is set to 1)
@@ -51,6 +300,8 @@ BF** bf_init(int entry, int pg_per_blk) {
         
         res[p]->p = false_p;
         res[p]->m = ceil(-1 / (log(1-pow(res[p]->p,1/1)) / log(exp(1.0))));
+//printf("pidx %d\tBF Bits %lu\n", p, res[p]->m);
+
         res[p]->targetsize = res[p]->m / 8;
         if(res[p]->m % 8) {
             res[p]->targetsize++;
@@ -58,6 +309,7 @@ BF** bf_init(int entry, int pg_per_blk) {
         sum_bits += res[p]->m;
         res[p]->start = sum_bits - res[p]->m;
     }
+//printf("\n");
     
     uint64_t sum_bytes = sum_bits / 8;
     if(sum_bits % 8) {
@@ -184,51 +436,6 @@ BF** bf_init(int entry, int pg_per_blk) {
 }
 */
 
-void magic_number_set() {
-    //
-}
-
-void symbol_set(uint64_t bf_bits, int idx, KEYT key, uint8_t* symbol, uint64_t* sym_start, uint64_t* sym_length) {
-	int end_byte = (sym_start[idx] + sym_length[idx] - 1) / 8;
-	int end_bit = (sym_start[idx] + sym_length[idx] - 1) % 8;
-	int symb_arr_sz = end_byte - (sym_start[idx] / 8) + 1;
-	int remain_chunk = sym_length[idx];
-	uint8_t chunk_sz = sym_length[idx] > end_bit + 1 ? end_bit + 1 : sym_length[idx];
-	KEYT h = hashfunction(key) % bf_bits;
-
-    // 1
-	if(end_bit == 7) {
-		symbol[end_byte] |= h << (8 - chunk_sz);
-	}
-	else {
-		symbol[end_byte] |= h & ((1 << chunk_sz) - 1);
-	}
-
-	if(symb_arr_sz == 1) {
-		goto task_end;
-	}
-
-	h >>= chunk_sz;
-	remain_chunk -= chunk_sz;
-	chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
-
-    // 2
-	symbol[end_byte - 1] |= h << (8 - chunk_sz);
-	if(symb_arr_sz == 2) {
-		goto task_end;
-	}
-
-	h >>= chunk_sz;
-	remain_chunk -= chunk_sz;
-	chunk_sz = remain_chunk > 8 ? 8 : remain_chunk;
-
-    // 3
-	symbol[end_byte - 2] |= h << (8 - chunk_sz);
-
-task_end:
-	return;
-}
-
 bool bf_check(BF** input, int idx, KEYT key) {
 	if(input[idx] == NULL) return false;
 	
@@ -277,6 +484,7 @@ uint32_t bf_func(BF* input) {
     return input->k;
 }
 
+/*
 BF* bf_cpy(BF *src) {
 	if(src == NULL) return NULL;
 
@@ -287,7 +495,6 @@ BF* bf_cpy(BF *src) {
 	return res;
 }
 
-/*
 void bf_save(BF* input){
 	write(save_fd,input,sizeof(BF));
 	write(save_fd,input->body,input->targetsize);
