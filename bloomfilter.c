@@ -61,12 +61,17 @@ void symbol_init() {
 			symbol_bit += 4;
 		}
 		st_man->sym_bits_pg[p] = symbol_bit;
-//printf("pidx %d\tSYMB bits %lu\n", p, st_man->sym_bits_pg[p]);
+
+#if BIT_CHECK
+        printf("page %d\tSYMBOL_bits %lu\n", p, st_man->sym_bits_pg[p]);
+#endif
 
 		st_man->sym_start[p] = sum;
 		sum += symbol_bit;
 	}
-//printf("\n");
+#if BIT_CHECK
+    printf("\n");
+#endif
 	
     st_man->sym_bits_super_blk = sum;
 	st_man->sym_bits_chip = sum * (SBLK_PER_CHIP);
@@ -295,12 +300,20 @@ BF** bf_init(int entry, int pg_per_blk) {
         res[p]->n = entry;
         res[p]->k = 1;
 
+#if SYMMETRIC
+        res[p]->p = (double)0.1*2/(PAGE_PER_SBLK + 1);
+#else
         true_p = pow(PR_SUCCESS, (double)1/p);
         false_p = 1 - true_p;
         
         res[p]->p = false_p;
+#endif
+
         res[p]->m = ceil(-1 / (log(1-pow(res[p]->p,1/1)) / log(exp(1.0))));
-//printf("pidx %d\tBF Bits %lu\n", p, res[p]->m);
+
+#if BIT_CHECK
+        printf("page %d\tBF_Bits %lu\n", p, res[p]->m);
+#endif
 
         res[p]->targetsize = res[p]->m / 8;
         if(res[p]->m % 8) {
@@ -309,8 +322,10 @@ BF** bf_init(int entry, int pg_per_blk) {
         sum_bits += res[p]->m;
         res[p]->start = sum_bits - res[p]->m;
     }
-//printf("\n");
-    
+#if BIT_CHECK
+    printf("\n");
+#endif
+
     uint64_t sum_bytes = sum_bits / 8;
     if(sum_bits % 8) {
         sum_bytes++;

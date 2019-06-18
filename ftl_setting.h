@@ -4,8 +4,11 @@
 #include <stdint.h>
 
 // Simulation version
+#define SYMMETRIC 0
+#define RB_TRIG 1
+#define BIT_CHECK 0
 #define OP 0.07
-#define DEBUG 1
+#define DEBUG 0
 #define ARM 0
 #define BUFFERED 0
 #define HEAVY_GC 0
@@ -21,9 +24,8 @@
 #define CHIP ((CHANNEL)*(WAY))
 
 // Block
-#define BLOCK_PER_CHIP 4
-//#define BLOCK_PER_CHIP 8192
-#define PAGE_PER_BLOCK 256
+#define BLOCK_PER_CHIP 8192
+#define PAGE_PER_BLOCK 1024
 #define TOTAL_BLOCK ((CHIP)*(BLOCK_PER_CHIP))
 
 // Superblock

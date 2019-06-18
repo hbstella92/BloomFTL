@@ -228,7 +228,8 @@ void make_test_set(uint32_t *w_arr, uint32_t *r_arr, char *w_t, char *r_t, uint8
 			lba = rand() % TOTAL_PAGE;
 			pbn = lba / mask; // random write
 
-			if(page_usage[pbn] == PAGE_PER_BLOCK) {
+			if(page_usage[pbn] == PAGE_PER_SBLK) {
+			//if(page_usage[pbn] == PAGE_PER_BLOCK) {
 				continue;
 			}
 
@@ -1156,6 +1157,7 @@ void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
 #endif
 	}
 
+#if RB_TRIG
 	// RB triggered (# of valid BFs in one superblock exceeds 50%)
 	if(sblk_man->num_bf[superblk] >= REBLOOM) {
 #if DEBUG
@@ -1180,6 +1182,7 @@ void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
 		debugging(way, chnl, blk, pbn);
 #endif
 	}
+#endif
 
 	int global_lba_start = ppn;
 	lba_start = global_lba_start % PAGE_PER_BLOCK;
@@ -1190,8 +1193,8 @@ void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
 	storage.chip_arr[way][chnl].data_blk[sb][blk].page_arr[lba_start].page = value;
 	write_cnt++;
 	disk_write_cnt++;
-
-	global_symb.lba_flag[superblk][lba % ((int)(PAGE_PER_SBLK * (1 - OP)))] = 1;
+	
+    global_symb.lba_flag[superblk][lba % ((int)(PAGE_PER_SBLK * (1 - OP)))] = 1;
 
 	if(global_lba_start != 0) {
 		if(lba_start == 0) {
@@ -1337,6 +1340,113 @@ void bloom_read(uint32_t lba) {
         exit(1);
     }
 }
+
+/*
+void bloom_read(uint32_t lba) {
+    uint32_t pbn;
+    register uint32_t hashkey;
+    register uint8_t* reg_symbol;
+	uint32_t superblk;
+	int chip, way, chnl, blk, ppn;
+	uint32_t real_lba;
+	int locate, new_bf_idx;
+	int delta=0, sb;
+
+	superblk = lba / mask;
+	sb = superblk % (BLOCK_PER_CHIP / SBLK_SZ);
+
+	chip = superblk / SBLK_PER_CHIP;
+	way = chip / CHANNEL;
+	chnl = chip % CHANNEL;
+
+	ppn = storage.chip_arr[way][chnl].empty[sb];
+	blk = ppn / PAGE_PER_BLOCK;
+	pbn = sb * SBLK_SZ + blk;
+
+	locate = lba % ((int)(PAGE_PER_SBLK * (1 - OP)));
+
+    new_bf_idx = sblk_man->num_bf[superblk];
+
+    reg_symbol = global_symb.symbol[chip][sb];
+
+	if(locate != 0) {
+		for(int i=locate-1; i>=0; i--) {
+			if(global_symb.lba_flag[superblk][i] == 0) {
+				break;
+			}
+			else {
+				delta++;
+			}
+		}
+	}
+
+	real_lba = lba - delta;
+	hashkey = hashing_key(real_lba);
+
+    int idx = (ppn % PAGE_PER_BLOCK) - 1;
+    int pa;
+    int seq_cnt = 0;
+
+	for(int b=blk; b>=0; b--) {
+		for(; idx>=0; idx--) {
+			if(b == 0 && idx == 0) {
+                break;
+            }
+
+            pa = b * PAGE_PER_BLOCK + idx;
+
+            if(global_symb.ppa_flag[superblk][pa] == 1) {
+                if(symbol_check(bf_man->bits_per_pg[new_bf_idx], hashkey + new_bf_idx, \
+                            reg_symbol, st_man->sym_start[new_bf_idx], st_man->sym_bits_pg[new_bf_idx]) == true) {
+                    if(storage.chip_arr[way][chnl].data_blk[sb][b].page_arr[idx].oob == real_lba) {
+                        found_cnt++;
+                        return;
+                    }
+                    else {
+                        notfound_cnt++;
+                        seq_cnt = 0;
+                    }
+                }
+                else {
+                    false_cnt++;
+                    seq_cnt = 0;
+                }
+
+                new_bf_idx--;
+            }
+            else {
+                seq_cnt++;
+            }
+
+            read_loop++;
+		}
+
+        idx = PAGE_PER_BLOCK - 1;
+	}
+
+    // Case of page offset 0
+    if(storage.chip_arr[way][chnl].data_blk[sb][0].page_arr[0].oob == real_lba) {
+        found_cnt++;
+    }
+    else {
+        printf("\nWRITE IS STOPPED\n");
+        debugging(way, chnl, blk, pbn);
+        printf("This should not happen !!\n");
+        printf("Until now, found cnt: %d (LBA %u delta %d)\n", found_cnt, lba, delta);
+        uint32_t startlba = lba;
+        for(int i=4; i>0; i--) {
+            printf("lbalist %u\tlba_flag %d\n", startlba - i, \
+                    global_symb.lba_flag[superblk][(startlba - i) % ((int)(PAGE_PER_SBLK * (1 - OP)))]);
+        }
+        for(int i=0; i<5; i++) {
+            printf("lbalist %u\tlba_flag %d\n", startlba + i, global_symb.lba_flag[superblk][(startlba + i) % ((int)(PAGE_PER_SBLK * (1 - OP)))]);
+        }
+        printf("\n");
+        fflush(stdout);
+        exit(1);
+    }
+}
+*/
 
 #if BUFFERED
 void bloom_write(uint32_t lba, uint32_t value, char* pttr) {
@@ -1572,6 +1682,17 @@ void print_stats(char* w_type, char* r_type) {
 	printf("Total SYMB bytes: %lu bytes ", targetsize);
     printf("(%.2lf%% of PFTL: BYTE UNIT)\n", (double)targetsize/(BYTE_PFTL*SBLK_PER_CHIP*CHIP)*100);
 
+#if NO_RB
+    sum = 0;
+    printf("\n### NO REBLOOMING ###\n");
+    printf("Average number of BF: ");
+    for(int b=0; b<TOTAL_SBLK; b++) {
+        sum += sblk_man->num_bf[b];
+    }
+    printf("%ld\n", sum/TOTAL_SBLK);
+
+    // TODO: add statistics
+#else
 	sum = 0;
 	printf("\n### AFTER REBLOOMING ###\n");
     printf("Average number of BF: ");
@@ -1579,19 +1700,6 @@ void print_stats(char* w_type, char* r_type) {
         sum += sblk_man->num_bf[b];
     }
     printf("%ld\n", sum/TOTAL_SBLK);
-/*
-	for(int p=0; p<=sblk_man->num_bf[0]; p++) {
-		sum += st_man->sym_bits_pg[p];
-	}
-	sum += (2 * PAGE_PER_SBLK);
-	targetsize = sum / 8;
-	if(sum % 8) {
-		targetsize++;
-	}
-	printf("Sum of REBLOOMED bits in 1 Superblock: %lu bits, %lu bytes ", sum, targetsize);
-	printf("(%.2lf%% of PFTL: BIT UNIT)\n", (double)sum/BIT_PFTL*100);
-*/
-    sum = 0;
 
 	sum = 0;
 	for(int b=0; b<TOTAL_SBLK; b++) {
@@ -1607,6 +1715,7 @@ void print_stats(char* w_type, char* r_type) {
     }
     printf("Total REBLOOMED bytes: %lu bytes ", targetsize);
     printf("(%.2lf%% of PFTL: BYTE UNIT)\n", (double)targetsize/(BYTE_PFTL*SBLK_PER_CHIP*CHIP)*100);
+#endif
 
     printf("\n### TIME RECORDS - READ ###\n");
     printf("Total read time: %.f (us)\n", r_time);
@@ -1647,7 +1756,8 @@ int main(int argc, char** argv) {
 	write_arr = (uint32_t*)malloc(sizeof(uint32_t) * DATA_SET);
 
 	printf("\nTEST START !!\n");
-	srand((unsigned int)time(NULL));
+	//srand((unsigned int)time(NULL));
+	srand(1);
 
 	// Generate LBA list
 	// Options: W_UNIQUE | R_UNIQUE | R_RD_ORDER | R_RD_GEN
